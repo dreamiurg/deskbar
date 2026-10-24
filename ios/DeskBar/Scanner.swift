@@ -27,9 +27,15 @@ struct Desk: Identifiable, Codable {
 
   var isDesk: Bool { candidate || family != .unknown }
 
+  // Distance only for desks: other devices transmit at very different power, so dBm alone says little about them.
+  // Calibrated on a Jiecang/Lierda controller under a wood top with a metal frame: −69 dBm at ~2 ft, −76 dBm at ~3 ft
+  // → about −75 dBm at 1 m, indoor path-loss exponent ≈ 2.7. Roughly ±50%: good for "which desk is this", not measuring.
   var signal: String {
-    let place = rssi > -60 ? "near" : rssi > -75 ? "same room" : "far"
-    return "\(rssi) dBm · \(place)"
+    guard isDesk else { return "\(rssi) dBm" }
+    let feet = pow(10, Double(-75 - rssi) / 27) * 3.28
+    let place = rssi > -80 ? "within a few feet" : rssi > -88 ? "nearby" : rssi > -95 ? "same room" : "far"
+    let rounded = feet < 10 ? Int(feet.rounded()) : Int((feet / 5).rounded()) * 5
+    return "\(rssi) dBm · \(place) (~\(max(rounded, 1)) ft)"
   }
 
   // iOS hides MAC addresses; Jiecang modules end their name with the MAC tail ("BLE Device 9A1C27"),
@@ -99,6 +105,7 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
   private var peripherals: [UUID: CBPeripheral] = [:]
   private var queue: [UUID] = []
   private var rssiShownAt: [UUID: Date] = [:]
+  private var rssiAvg: [UUID: Double] = [:]  // smoothed: single readings jump ±5–10 dBm
   private var seenIDs: Set<UUID> = []
   private var probing: Set<UUID> = []  // sent Jiecang queries this read; waiting for a reply
   private var token = UUID()  // identifies the current read; delayed work from an older read is ignored
@@ -309,7 +316,9 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
     }
     // Advertisements arrive many times a second; publish (and redraw) only real changes, RSSI at most every 2 s.
     let rssiDue = Date().timeIntervalSince(rssiShownAt[p.identifier] ?? .distantPast) > 2
-    if rssiDue { d.rssi = rssi.intValue; rssiShownAt[p.identifier] = Date() }
+    let smoothed = rssiAvg[p.identifier].map { $0 * 0.7 + rssi.doubleValue * 0.3 } ?? rssi.doubleValue
+    rssiAvg[p.identifier] = smoothed
+    if rssiDue { d.rssi = Int(smoothed.rounded()); rssiShownAt[p.identifier] = Date() }
     if let name { d.name = name }
     d.candidate = d.candidate || candidate
     if firstThisScan || rssiDue || d.name != desks[p.identifier]!.name || d.candidate != desks[p.identifier]!.candidate {
