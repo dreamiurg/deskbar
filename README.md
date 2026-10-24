@@ -18,10 +18,10 @@ Stop, "Save Current Height as…", Forget Desk and Open at Login. macOS asks for
 ## iPhone app
 
 ```bash
-cd ios && xcodegen && open DeskBar.xcodeproj
+cd ios && DEVELOPMENT_TEAM=<your team ID> xcodegen && open DeskBar.xcodeproj
 ```
 
-Set your signing team, then run on a device. What it does:
+Generate with your Apple team ID (`DEVELOPMENT_TEAM=ABCDE12345 xcodegen`), then run on a device. What it does:
 
 - **Desks page:** pull down to scan; each desk shows an approximate distance, its height and a short ID. Tap to expand.
 - **Height controls:** hold Raise, Lower, Sit or Stand; the desk stops when you lift your finger.
@@ -36,6 +36,9 @@ A desk accepts one Bluetooth connection at a time: quit the Mac app before using
 pre-commit install && pre-commit install --hook-type pre-push
 make check
 ```
+
+Hooks also block personal data: email addresses (other than noreply/example ones), full MAC addresses, and commits
+made with a non-noreply git email (`scripts/check-privacy.sh`, also run in CI on every PR).
 
 `make check` runs swift-format, SwiftLint, the complexity limits, the logic tests and a typecheck of both apps.
 CI runs the parts that work on Linux; builds stay local because macOS runners are expensive.
