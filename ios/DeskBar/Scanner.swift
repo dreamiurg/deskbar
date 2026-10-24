@@ -18,8 +18,19 @@ struct Desk: Identifiable, Codable {
   var family: Family = .unknown
   var cm: Double?
   var shownUnit = "cm"
-  var status = ""
+  var status = ""  // short chip text: "Reading…", "Couldn't read", "Not supported"
+  var problem: String?  // plain-language reason after a failed read
   var readAt: Date?
+  var lastHeard: Date?
+  var services: [String]?  // advertised service UUIDs (optional so desks saved by older builds still decode)
+  var maker: String?  // from the advertisement's company ID, when known
+
+  var isDesk: Bool { candidate || family != .unknown }
+
+  var signal: String {
+    let place = rssi > -60 ? "near" : rssi > -75 ? "same room" : "far"
+    return "\(rssi) dBm · \(place)"
+  }
 
   // iOS hides MAC addresses; Jiecang modules end their name with the MAC tail ("BLE Device 9A1C27"),
   // otherwise fall back to the end of the iOS-assigned identifier.
@@ -42,6 +53,8 @@ let jiecangServices = ["FE60", "FF12", "FF00", "00FF"].map { CBUUID(string: $0) 
 let jiecangWrite = ["FE61", "FF01"].map { CBUUID(string: $0) }
 let jiecangNotify = ["FE62", "FF02"].map { CBUUID(string: $0) }
 let deskNames = ["desk", "uplift", "jiecang", "desky", "apex", "ble device"]
+// Bluetooth SIG company IDs for makers common around an office. Apple devices advertise their owner's name, so they're shown by maker.
+let makers: [UInt16: String] = [0x004C: "Apple", 0x0075: "Samsung", 0x0006: "Microsoft", 0x00E0: "Google", 0x0087: "Garmin", 0x012D: "Sony"]
 
 // Same encoding as frame() in the mac app's main.swift.
 func jiecangFrame(_ op: UInt8, _ data: [UInt8] = []) -> Data {
@@ -70,6 +83,8 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
   @Published var readDone = 0
   @Published var readTotal = 0
   @Published var lastRefresh = UserDefaults.standard.object(forKey: "lastRefresh") as? Date
+  @Published var scanStarted = UserDefaults.standard.object(forKey: "scanStarted") as? Date
+  @Published var failed: UUID?  // last desk whose read failed, so the page can open its card
 
   private var central: CBCentralManager!
   private var peripherals: [UUID: CBPeripheral] = [:]
@@ -86,29 +101,37 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
     super.init()
     // Desks found on earlier scans, so the list isn't empty before the first pull-to-refresh.
     if let data = UserDefaults.standard.data(forKey: "desks"), let saved = try? JSONDecoder().decode([Desk].self, from: data) {
-      desks = Dictionary(uniqueKeysWithValues: saved.map { ($0.id, $0) })
+      // A failure from an earlier session isn't current; show the last good height instead.
+      desks = Dictionary(uniqueKeysWithValues: saved.map { var d = $0; d.status = ""; d.problem = nil; return (d.id, d) })
     }
     central = CBCentralManager(delegate: self, queue: .main)
   }
+
+  static let scanSeconds = 6
 
   /// Pull-to-refresh: listen for advertisements, then read every desk heard (pinned and nearby, not archived).
   func refresh() async {
     guard central.state == .poweredOn, !scanning, readTotal == 0 else { return }
     scanning = true
     seenIDs = []; seen = 0; seenDesks = 0
+    scanStarted = Date()
+    UserDefaults.standard.set(scanStarted, forKey: "scanStarted")
     central.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
-    for s in stride(from: 6, to: 0, by: -1) {
+    for s in stride(from: Self.scanSeconds, to: 0, by: -1) {
       secondsLeft = s
-      try? await Task.sleep(for: .seconds(1))
+      do { try await Task.sleep(for: .seconds(1)) } catch { break }  // cancelled: stop early, never spin
     }
     central.stopScan()
     scanning = false
     let ids = desks.values
-      .filter { seenIDs.contains($0.id) && ($0.candidate || $0.family != .unknown) && !archived.contains($0.id.uuidString) }
+      .filter { seenIDs.contains($0.id) && $0.isDesk && !archived.contains($0.id.uuidString) }
       .map(\.id)
     readDone = 0; readTotal = ids.count
     read(ids)
-    while busy != nil || !queue.isEmpty { try? await Task.sleep(for: .milliseconds(200)) }
+    // Reads finish on their own; if this task is cancelled, stop waiting instead of spinning on a throwing sleep.
+    while busy != nil || !queue.isEmpty {
+      do { try await Task.sleep(for: .milliseconds(200)) } catch { break }
+    }
     readTotal = 0
     lastRefresh = Date()
     UserDefaults.standard.set(lastRefresh, forKey: "lastRefresh")
@@ -116,7 +139,7 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
   }
 
   private func save() {
-    let keep = desks.values.filter { $0.candidate || $0.family != .unknown }  // not every phone and earbud nearby
+    let keep = desks.values.filter(\.isDesk)  // not every phone and earbud nearby
     UserDefaults.standard.set(try? JSONEncoder().encode(Array(keep)), forKey: "desks")
   }
 
@@ -139,9 +162,13 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
     token = UUID()
     buffer = Data(); rawTenths = nil; unit = nil
     desks[p.identifier]?.status = "Connecting…"
+    desks[p.identifier]?.problem = nil
+    failed = nil  // so a repeat failure of the same desk still reopens its card
     p.delegate = self
     central.connect(p)
-    later(12) { self.finish(p, "No reply") }
+    later(12) {
+      self.fail(p, "The desk didn't answer within 12 seconds. It may be out of range, asleep, or a model DeskBar can't read yet.")
+    }
   }
 
   // Runs `work` after `seconds` only if the same read is still in progress.
@@ -150,6 +177,13 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
     DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
       if self?.token == t, self?.busy != nil { work() }
     }
+  }
+
+  private func fail(_ p: CBPeripheral, _ problem: String, status: String = "Couldn't read") {
+    guard busy == p.identifier else { return }
+    desks[p.identifier]?.problem = problem
+    failed = p.identifier
+    finish(p, status)
   }
 
   private func finish(_ p: CBPeripheral, _ status: String) {
@@ -179,23 +213,35 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
     let services = (a[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID]) ?? []
     let candidate = services.contains(linakAdv) || services.contains(where: jiecangServices.contains)
       || deskNames.contains { name?.lowercased().contains($0) == true }
-    if seenIDs.insert(p.identifier).inserted {
+    let mfg = a[CBAdvertisementDataManufacturerDataKey] as? Data
+    let maker = mfg.flatMap { $0.count >= 2 ? makers[UInt16($0[$0.startIndex]) | UInt16($0[$0.startIndex + 1]) << 8] : nil }
+    let firstThisScan = seenIDs.insert(p.identifier).inserted
+    if firstThisScan {
       seen = seenIDs.count
-      if candidate || desks[p.identifier].map({ $0.family != .unknown }) == true { seenDesks += 1 }
+      if candidate || desks[p.identifier]?.isDesk == true { seenDesks += 1 }
     }
     guard var d = desks[p.identifier] else {
-      guard name != nil || candidate else { return }  // skip anonymous beacons (and don't retain them)
+      // Skip nameless devices: phones and earbuds rotate private addresses, so keeping them grows without bound.
+      guard name != nil || candidate else { return }
       peripherals[p.identifier] = p
-      desks[p.identifier] = Desk(id: p.identifier, name: name ?? "Unnamed", rssi: rssi.intValue, candidate: candidate)
+      desks[p.identifier] = Desk(id: p.identifier, name: name ?? "Unnamed", rssi: rssi.intValue, candidate: candidate,
+                                 lastHeard: Date(), services: services.map(\.uuidString), maker: maker)
       return
     }
     peripherals[p.identifier] = p
+    if firstThisScan {
+      d.lastHeard = Date()
+      if !services.isEmpty { d.services = services.map(\.uuidString) }
+      if maker != nil { d.maker = maker }
+    }
     // Advertisements arrive many times a second; publish (and redraw) only real changes, RSSI at most every 2 s.
     let rssiDue = Date().timeIntervalSince(rssiShownAt[p.identifier] ?? .distantPast) > 2
     if rssiDue { d.rssi = rssi.intValue; rssiShownAt[p.identifier] = Date() }
     if let name { d.name = name }
     d.candidate = d.candidate || candidate
-    if rssiDue || d.name != desks[p.identifier]!.name || d.candidate != desks[p.identifier]!.candidate { desks[p.identifier] = d }
+    if firstThisScan || rssiDue || d.name != desks[p.identifier]!.name || d.candidate != desks[p.identifier]!.candidate {
+      desks[p.identifier] = d
+    }
   }
 
   func centralManager(_ c: CBCentralManager, didConnect p: CBPeripheral) {
@@ -204,18 +250,22 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
   }
 
   func centralManager(_ c: CBCentralManager, didFailToConnect p: CBPeripheral, error: Error?) {
-    finish(p, "Connect failed")  // often: another phone/app already holds the desk
+    let d = desks[p.identifier]
+    if d?.family == .linak || d?.services?.contains(linakAdv.uuidString) == true {
+      return fail(p, "Linak desks must be paired with this iPhone first. Hold the desk's Bluetooth button until it blinks, then try again.", status: "Needs pairing")
+    }
+    fail(p, "Another phone or app may be connected to this desk. A desk accepts one connection at a time, so close the other app (for example DeskBar on a Mac) and try again.")
   }
 
   func centralManager(_ c: CBCentralManager, didDisconnectPeripheral p: CBPeripheral, error: Error?) {
-    if busy == p.identifier { finish(p, "Disconnected") }
+    if busy == p.identifier { fail(p, "The desk dropped the connection before answering. Try again.") }
   }
 
   // MARK: Peripheral
 
   func peripheral(_ p: CBPeripheral, didDiscoverServices error: Error?) {
     let services = p.services ?? []
-    if services.isEmpty { return finish(p, "No services") }
+    if services.isEmpty { return fail(p, "This device exposes no Bluetooth services DeskBar can talk to.", status: "Not supported") }
     services.forEach { p.discoverCharacteristics(nil, for: $0) }
   }
 
@@ -241,19 +291,19 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
     // Unknown device: once every service is explored, report what it exposes so it can be identified later.
     let all = p.services ?? []
     if all.allSatisfy({ $0.characteristics != nil }), desks[p.identifier]?.family == .unknown, !probing.contains(p.identifier) {
-      finish(p, "Unsupported: " + all.map(\.uuid.uuidString).joined(separator: ", "))
+      fail(p, "DeskBar can't read this device yet. It offers: " + all.map(\.uuid.uuidString).joined(separator: ", ") + ".", status: "Not supported")
     }
   }
 
   func peripheral(_ p: CBPeripheral, didUpdateValueFor ch: CBCharacteristic, error: Error?) {
     guard let v = ch.value else { return }
     if ch.uuid == linakHeight {
-      guard v.count >= 2 else { return finish(p, "Bad Linak data") }
+      guard v.count >= 2 else { return fail(p, "The desk sent a height DeskBar couldn't decode.") }
       // ponytail: assumes the Idåsen's 62.0 cm minimum; other Linak frames have different bases
       desks[p.identifier]?.cm = 62.0 + Double(Int(v[0]) | Int(v[1]) << 8) / 100
       desks[p.identifier]?.shownUnit = "cm"
       desks[p.identifier]?.readAt = Date()
-      return finish(p, "OK")
+      return finish(p, "")
     }
     guard jiecangNotify.contains(ch.uuid) else { return }
     buffer += v
@@ -284,8 +334,8 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
     desks[p.identifier]?.cm = inches ? Double(raw) / 10 * 2.54 : Double(raw) / 10
     desks[p.identifier]?.shownUnit = inches ? "in" : "cm"
     desks[p.identifier]?.readAt = Date()
-    if unit != nil { finish(p, "OK") } else if !hadHeight {
-      later(1) { self.finish(p, "OK") }  // unit reply may not come
+    if unit != nil { finish(p, "") } else if !hadHeight {
+      later(1) { self.finish(p, "") }  // unit reply may not come
     }
   }
 }
