@@ -232,25 +232,23 @@ struct ContentView: View {
         preset("Stand", mm: $standMM, d: d)
       }
       .disabled(!ready)
-      Text("Hold Raise or Lower to move; release to stop. Touch and hold a preset to save the current height.")
+      // Saving lives in its own menu: a long press on a preset is the hold-to-move gesture.
+      Menu {
+        Button("Save as Sit") { if let cm = d.cm { sitMM = Int((cm * 10).rounded()) } }
+        Button("Save as Stand") { if let cm = d.cm { standMM = Int((cm * 10).rounded()) } }
+      } label: {
+        Label("Save current height as preset", systemImage: "square.and.arrow.down").font(.subheadline)
+      }
+      .disabled(d.cm == nil)
+      Text("Every button moves the desk only while held; lift your finger to stop.")
         .font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
     }
   }
 
+  // Hold to travel toward the preset; releasing stops the desk, same as Raise and Lower.
   func preset(_ name: String, mm: Binding<Int>, d: Desk) -> some View {
-    let shown = Desk.inches(mm.wrappedValue)
-    return Button { scanner.goTo(mm: mm.wrappedValue) } label: {
-      VStack(spacing: 2) {
-        Text(name).font(.subheadline.weight(.semibold))
-        Text(shown).font(.caption).monospacedDigit()
-      }
-      .frame(maxWidth: .infinity, minHeight: 44)
-    }
-    .buttonStyle(.bordered)
-    .contextMenu {
-      Button("Save Current Height as \(name)", systemImage: "square.and.arrow.down") {
-        if let cm = d.cm { mm.wrappedValue = Int((cm * 10).rounded()) }
-      }
+    HoldButton(title: "\(name) · \(Desk.inches(mm.wrappedValue))", icon: name == "Sit" ? "chair" : "figure.stand") {
+      $0 ? scanner.hold(toward: mm.wrappedValue) : scanner.stopMoving()
     }
   }
 

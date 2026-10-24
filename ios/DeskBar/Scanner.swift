@@ -94,7 +94,6 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
   private var controlTx: CBCharacteristic?
   private var controlType: CBCharacteristicWriteType = .withResponse
   private var holdTimer: Timer?
-  private var moveToken = UUID()  // any Stop replaces it, so a delayed move scheduled before the Stop never fires
 
   private var central: CBCentralManager!
   private var peripherals: [UUID: CBPeripheral] = [:]
@@ -217,33 +216,31 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
   }
 
   /// Press-and-hold: wake the controller, then repeat the move frame every 0.1 s like a held keypad button.
-  func hold(up: Bool) {
+  /// Every movement works this way; releasing calls stopMoving().
+  func hold(up: Bool) { holdRepeating(up ? 0x01 : 0x02) }
+
+  /// Press-and-hold towards a preset height: the target frame repeats while held, so the desk stops on release
+  /// (and also stops by itself on arrival).
+  func hold(toward mm: Int) {
+    guard (500...1400).contains(mm) else { return }
+    holdRepeating(0x1B, [UInt8(mm >> 8), UInt8(mm & 0xFF)])
+  }
+
+  private func holdRepeating(_ op: UInt8, _ data: [UInt8] = []) {
     guard controlReady else { return }
     holdTimer?.invalidate()
     send(0xFE)
-    let op: UInt8 = up ? 0x01 : 0x02
     let started = Date()
     holdTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
       // Safety net: if a release is ever missed, stop after 30 s instead of driving the desk to its limit.
-      if Date().timeIntervalSince(started) > 30 { self?.stopMoving() } else { self?.send(op) }
+      if Date().timeIntervalSince(started) > 30 { self?.stopMoving() } else { self?.send(op, data) }
     }
   }
 
   func stopMoving() {
-    moveToken = UUID()
     holdTimer?.invalidate()
     holdTimer = nil
     send(0x2B)
-  }
-
-  /// Drives the desk to an absolute height (the controller stops by itself on arrival).
-  func goTo(mm: Int) {
-    guard controlReady, (500...1400).contains(mm) else { return }
-    holdTimer?.invalidate()
-    send(0xFE)
-    let move = UUID()
-    moveToken = move
-    later(0.3) { if self.moveToken == move { self.send(0x1B, [UInt8(mm >> 8), UInt8(mm & 0xFF)]) } }
   }
 
   private func send(_ op: UInt8, _ data: [UInt8] = []) {
