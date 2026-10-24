@@ -69,7 +69,7 @@ struct Advert {
     candidate = looksLikeDesk(name: name, services: services)
     mfg = a[CBAdvertisementDataManufacturerDataKey] as? Data
     txPower = (a[CBAdvertisementDataTxPowerLevelKey] as? NSNumber)?.intValue
-    maker = mfg.flatMap { m in m.count >= 2 ? makers[UInt16(m[m.startIndex]) | UInt16(m[m.startIndex + 1]) << 8] : nil }
+    maker = BluetoothNumbers.company(fromManufacturerData: mfg)
   }
 }
 
@@ -89,10 +89,6 @@ let linakHeight = CBUUID(string: "99FA0021-338A-1024-8A49-009C0215F78A")
 let jiecangServices = ["FE60", "FF12", "FF00", "00FF"].map { CBUUID(string: $0) }
 let jiecangWrite = ["FE61", "FF01"].map { CBUUID(string: $0) }
 let jiecangNotify = ["FE62", "FF02"].map { CBUUID(string: $0) }
-// Bluetooth SIG company IDs for makers common around an office. Apple devices advertise their owner's name, so they're shown by maker.
-let makers: [UInt16: String] = [
-  0x004C: "Apple", 0x0075: "Samsung", 0x0006: "Microsoft", 0x00E0: "Google", 0x0087: "Garmin", 0x012D: "Sony",
-]
 
 final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeripheralDelegate {
   @Published var desks: [UUID: Desk] = [:]

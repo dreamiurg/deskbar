@@ -42,6 +42,12 @@ CI runs the parts that work on Linux; builds stay local because macOS runners ar
 Every merge to `main` is released automatically: breaking change → major, `feat:` → minor, anything else → patch
 (`.github/workflows/release.yml`). Builds stamp in the latest tag, the commit count and the commit hash.
 
+## Acknowledgements
+
+Bluetooth company and service names come from Nordic Semiconductor's
+[bluetooth-numbers-database](https://github.com/NordicSemiconductor/bluetooth-numbers-database) (BSD-3-Clause, license in
+`ios/DeskBar/BluetoothNumbers/`). Refresh with `scripts/update-bluetooth-numbers.sh`.
+
 ## License
 
 Private project.

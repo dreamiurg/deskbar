@@ -151,7 +151,10 @@ struct ContentView: View {
   }
 
   // Apple devices advertise their owner's name ("Jane's AirPods"); list them by maker instead.
-  func masked(_ d: Desk) -> Bool { !d.isDesk && d.maker == "Apple" && scanner.labels[d.id.uuidString] == nil }
+  // "Apple, Inc." in the Bluetooth SIG list ("Apple" in desks saved by older builds).
+  func masked(_ d: Desk) -> Bool {
+    !d.isDesk && d.maker?.hasPrefix("Apple") == true && scanner.labels[d.id.uuidString] == nil
+  }
   func title(_ d: Desk) -> String {
     guard masked(d) else { return scanner.label(d) }
     switch d.type {
@@ -355,11 +358,12 @@ struct ContentView: View {
       rows.append(("Keypad unit", d.cm == nil ? "–" : d.shownUnit == "in" ? "inches" : "centimetres"))
     } else {
       rows.append(("Type", "\(d.type.rawValue) · \(d.type.power)"))
-      rows.append(("Maker", d.maker ?? "Unknown"))
     }
+    rows.append(("Maker", d.maker ?? "Not advertised"))
     rows.append(("Signal", d.signal))
     rows.append(("Bluetooth name", masked(d) ? "hidden (personal device)" : d.name))
-    rows.append(("Services", (d.services ?? []).isEmpty ? "none advertised" : d.services!.joined(separator: ", ")))
+    let services = Array(Set(d.services ?? [])).sorted().map(BluetoothNumbers.describe)  // some devices repeat a UUID
+    rows.append(("Services", services.isEmpty ? "none advertised" : services.joined(separator: ", ")))
     rows.append(("Last heard", ago(d.lastHeard)))
     rows.append(("ID", d.short))
     return rows
