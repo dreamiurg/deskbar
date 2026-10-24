@@ -92,10 +92,13 @@ struct ContentView: View {
     if set.contains(key) { set.remove(key) } else { set.insert(key) }
   }
 
+  // Advertised names are set by whoever owns the device: keep spreadsheets from running them as formulas.
+  func safe(_ s: String) -> String { "=+-@\t\r".contains(s.first ?? " ") ? "'" + s : s }
+
   func csv() -> String {
     let iso = ISO8601DateFormatter()
     let lines = visible.filter { $0.cm != nil }.map { d in
-      [scanner.label(d), d.name, d.family.rawValue, d.short, String(format: "%.1f", d.cm! / 2.54), String(format: "%.1f", d.cm!),
+      [safe(scanner.label(d)), safe(d.name), d.family.rawValue, d.short, String(format: "%.1f", d.cm! / 2.54), String(format: "%.1f", d.cm!),
        "\(d.rssi)", d.readAt.map(iso.string) ?? "", d.id.uuidString]
         .map { "\"\($0.replacingOccurrences(of: "\"", with: "\"\""))\"" }.joined(separator: ",")
     }
