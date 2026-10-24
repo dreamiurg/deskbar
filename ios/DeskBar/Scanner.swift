@@ -5,8 +5,10 @@
 //    op 0x01 = height in tenths of display unit, op 0x0E = unit (0 cm, 1 in). Query 0x07 makes the
 //    desk report without moving. Refs: librick/uplift-ble, j0rdsta/ha-desky, vakintosh/ha-desky-ble.
 //  Linak / IKEA Idåsen: char 99FA0021, u16 LE in 0.1 mm above the desk's minimum height. Ref: newAM/idasen.
+import ActivityKit
 import CoreBluetooth
 import Foundation
+import UserNotifications
 
 // Rough device type, guessed from the advertisement. Drives the distance estimate: a TV on mains power is much
 // "louder" than a coin-cell tag, so the same dBm means very different distances.
@@ -158,6 +160,22 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
   // Height control (Jiecang): one connection held open while a desk's controls are shown.
   @Published var controlling: UUID?
   @Published var controlReady = false  // connected and the desk's command channel found
+  // Watch mode: a desk-only scan that keeps running in the background, alerts about desks this phone has never seen,
+  // and feeds a Live Activity. Listening only; it never connects.
+  @Published var watching = UserDefaults.standard.bool(forKey: "watching")
+  @Published var watchUntil = UserDefaults.standard.object(forKey: "watchUntil") as? Date
+  @Published var notificationsAllowed = true
+  @Published var newToday = Set(UserDefaults.standard.stringArray(forKey: "newToday") ?? []) {
+    didSet { UserDefaults.standard.set(Array(newToday), forKey: "newToday") }
+  }
+  private var newTodayDay = UserDefaults.standard.string(forKey: "newTodayDay") ?? ""
+  private var knownIDs = Set(UserDefaults.standard.stringArray(forKey: "knownDesks") ?? [])  // every desk ever heard
+  private var recentNew: [(UUID, Date)] = []  // new desks in the last minute, summarised in one alert
+  private var watchTimer: Timer?
+  private var activity: Activity<WatchAttributes>?
+  private var activityUpdatedAt = Date.distantPast
+  private var activityUpdateQueued = false
+  static let deskServices = jiecangServices + [linakAdv]
   private var controlTx: CBCharacteristic?
   private var controlType: CBCharacteristicWriteType = .withResponse
   private var holdTimer: Timer?
@@ -181,10 +199,151 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
       // A failure from an earlier session isn't current; show the last good height instead.
       desks = Dictionary(uniqueKeysWithValues: saved.map { var d = $0; d.status = ""; d.problem = nil; return (d.id, d) })
     }
-    central = CBCentralManager(delegate: self, queue: .main)
+    if knownIDs.isEmpty { knownIDs = Set(desks.keys.map(\.uuidString)) }  // desks found before Watch existed aren't "new"
+    if let until = watchUntil, until < Date() { watching = false }
+    activity = Activity<WatchAttributes>.activities.first
+    UNUserNotificationCenter.current().getNotificationSettings { s in
+      DispatchQueue.main.async { self.notificationsAllowed = s.authorizationStatus != .denied }
+    }
+    // Restore identifier: iOS can relaunch the app in the background for desk advertisements after it was suspended.
+    central = CBCentralManager(delegate: self, queue: .main, options: [CBCentralManagerOptionRestoreIdentifierKey: "deskbar"])
+  }
+
+  // MARK: Watch mode
+
+  func startWatching() {
+    guard !watching else { return }
+    watching = true
+    watchUntil = Date().addingTimeInterval(8 * 3600)  // Live Activities can't outlive 8 h
+    persistWatch()
+    UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { ok, _ in
+      DispatchQueue.main.async { self.notificationsAllowed = ok }
+    }
+    if ActivityAuthorizationInfo().areActivitiesEnabled, let until = watchUntil {
+      activity = try? Activity.request(attributes: WatchAttributes(until: until),
+                                       content: .init(state: watchState(), staleDate: until))
+    }
+    resumeWatch()
+  }
+
+  func stopWatching() {
+    watching = false
+    watchUntil = nil
+    persistWatch()
+    watchTimer?.invalidate(); watchTimer = nil
+    if !scanning { central.stopScan() }
+    let ending = activity
+    activity = nil
+    Task { await ending?.end(nil, dismissalPolicy: .immediate) }
+  }
+
+  /// (Re)starts the desk-only scan. iOS allows it in the background only with service UUIDs, and paces it itself.
+  private func resumeWatch() {
+    guard watching, central.state == .poweredOn else { return }
+    central.scanForPeripherals(withServices: Self.deskServices, options: nil)
+    watchTimer?.invalidate()
+    // Every 5 min restart the scan so desks still in range report again; this is what keeps "nearby" current.
+    // Timers only fire while iOS gives the app time; in the background that's whenever a desk wakes it.
+    watchTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in self?.watchTick() }
+  }
+
+  private func watchTick() {
+    guard watching else { return }
+    if let until = watchUntil, until < Date() { return stopWatching() }
+    if !scanning {
+      central.stopScan()
+      central.scanForPeripherals(withServices: Self.deskServices, options: nil)
+    }
+    updateActivity(force: true)
+    save()  // keep lastHeard across relaunches
+  }
+
+  private func persistWatch() {
+    UserDefaults.standard.set(watching, forKey: "watching")
+    UserDefaults.standard.set(watchUntil, forKey: "watchUntil")
+  }
+
+  /// Records a desk heard while watching; desks this phone has never heard get an alert.
+  private func heardWhileWatching(_ id: UUID) {
+    let key = id.uuidString
+    rollDay()
+    if !knownIDs.contains(key) {
+      knownIDs.insert(key)
+      UserDefaults.standard.set(Array(knownIDs), forKey: "knownDesks")
+      if !hidden.contains(key) {
+        newToday.insert(key)
+        recentNew = recentNew.filter { Date().timeIntervalSince($0.1) < 60 } + [(id, Date())]
+        alertNewDesks()
+      }
+    }
+    updateActivity(force: false)
+  }
+
+  // Posted immediately: a background wake can end before any delayed work runs. A fixed identifier makes desks found
+  // within the same minute replace one alert ("3 new desks nearby") instead of stacking three.
+  private func alertNewDesks() {
+    let ids = recentNew.map(\.0)
+    save()
+    guard !ids.isEmpty, notificationsAllowed else { return }
+    let content = UNMutableNotificationContent()
+    if ids.count == 1, let d = desks[ids[0]] {
+      content.title = "New desk nearby"
+      content.body = "\(label(d)) · about \(d.feet) ft away"
+    } else {
+      content.title = "\(ids.count) new desks nearby"
+      content.body = ids.compactMap { desks[$0].map(label) }.prefix(3).joined(separator: ", ")
+    }
+    UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "new-desks", content: content, trigger: nil))
+  }
+
+  /// Clears "new today" after midnight; called wherever the count is shown.
+  func rollDay() {
+    let today = Date().formatted(date: .numeric, time: .omitted)
+    guard newTodayDay != today else { return }
+    newTodayDay = today
+    UserDefaults.standard.set(today, forKey: "newTodayDay")
+    if !newToday.isEmpty { newToday = [] }
+  }
+
+  var nearbyDesks: [Desk] {
+    let since = Date().addingTimeInterval(-600)
+    return desks.values.filter { $0.isDesk && !hidden.contains($0.id.uuidString) && ($0.lastHeard ?? .distantPast) > since }
+  }
+
+  private func watchState() -> WatchAttributes.ContentState {
+    rollDay()
+    let near = nearbyDesks
+    let closest = near.min { $0.feet < $1.feet }
+    return .init(nearby: near.count, newToday: newToday.count, closestFeet: closest?.feet, closestLabel: closest.map(label),
+                 lastHeard: near.compactMap(\.lastHeard).max(), bluetoothOff: central.state == .poweredOff)
+  }
+
+  // At most every 15 s unless forced: iOS rate-limits Live Activity updates and each one costs a little battery.
+  private func updateActivity(force: Bool) {
+    guard let a = activity else { return }
+    let wait = 15 - Date().timeIntervalSince(activityUpdatedAt)
+    if !force && wait > 0 {
+      // Send the latest state once the window passes, so the lock screen never sits on an older count.
+      if !activityUpdateQueued {
+        activityUpdateQueued = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait) { self.activityUpdateQueued = false; self.updateActivity(force: true) }
+      }
+      return
+    }
+    activityUpdatedAt = Date()
+    let content = ActivityContent(state: watchState(), staleDate: watchUntil)
+    Task { await a.update(content) }
+  }
+
+  func centralManager(_ c: CBCentralManager, willRestoreState dict: [String: Any]) {
+    // Nothing to rebuild: the scan restarts from centralManagerDidUpdateState once Bluetooth is on.
   }
 
   static let scanSeconds = 6
+
+  // Created when the app process starts (see DeskBarApp.init), not when a window appears: a background relaunch for a
+  // desk advertisement has no window, and CoreBluetooth restoration needs the restore-identifier central recreated.
+  static let shared = Scanner()
 
   /// Pull-to-refresh: listen for advertisements, then read every desk heard (pinned and nearby, not hidden).
   func refresh() async {
@@ -200,6 +359,7 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
     }
     central.stopScan()
     scanning = false
+    resumeWatch()  // the pull-down scan replaced the watch scan; put it back
     let ids = desks.values
       .filter { seenIDs.contains($0.id) && $0.isDesk && !hidden.contains($0.id.uuidString) }
       .map(\.id)
@@ -218,6 +378,9 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
   private func save() {
     let keep = desks.values.filter(\.isDesk)  // not every phone and earbud nearby
     UserDefaults.standard.set(try? JSONEncoder().encode(Array(keep)), forKey: "desks")
+    // Desks found by a pull-down count as seen, so Watch won't later announce them as new.
+    knownIDs.formUnion(keep.map(\.id.uuidString))
+    UserDefaults.standard.set(Array(knownIDs), forKey: "knownDesks")
   }
 
   func label(_ d: Desk) -> String { labels[d.id.uuidString] ?? d.name }
@@ -341,9 +504,14 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
 
   func centralManagerDidUpdateState(_ c: CBCentralManager) {
     switch c.state {
-    case .poweredOn: bluetoothProblem = nil  // idle until pull-to-refresh
+    case .poweredOn:
+      bluetoothProblem = nil  // idle until pull-to-refresh, unless Watch is on
+      resumeWatch()
+      updateActivity(force: true)
     case .unauthorized: bluetoothProblem = "Bluetooth access is off for DeskBar. Turn it on in Settings › DeskBar."
-    case .poweredOff: bluetoothProblem = "Bluetooth is off."
+    case .poweredOff:
+      bluetoothProblem = "Bluetooth is off."
+      updateActivity(force: true)
     case .unsupported: bluetoothProblem = "This device has no Bluetooth LE."
     default: bluetoothProblem = nil  // unknown/resetting: transient
     }
@@ -369,10 +537,12 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
       desks[p.identifier] = Desk(id: p.identifier, name: name ?? "Unnamed", rssi: rssi.intValue, candidate: candidate,
                                  lastHeard: Date(), services: services.map(\.uuidString), maker: maker,
                                  kind: Kind.guess(name: name, mfg: mfg, desk: candidate), txPower: txPower)
+      if watching && candidate { heardWhileWatching(p.identifier) }  // first sighting is exactly the case Watch alerts on
       return
     }
     peripherals[p.identifier] = p
-    if firstThisScan {
+    let watchUpdate = watching && !scanning  // a pull-down already reports every packet; don't add per-packet work on top
+    if firstThisScan || watchUpdate {
       d.lastHeard = Date()
       if !services.isEmpty { d.services = services.map(\.uuidString) }
       if maker != nil { d.maker = maker }
@@ -386,9 +556,10 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
     if rssiDue { d.rssi = Int(smoothed.rounded()); rssiShownAt[p.identifier] = Date() }
     if let name { d.name = name }
     d.candidate = d.candidate || candidate
-    if firstThisScan || rssiDue || d.name != desks[p.identifier]!.name || d.candidate != desks[p.identifier]!.candidate {
+    if firstThisScan || watchUpdate || rssiDue || d.name != desks[p.identifier]!.name || d.candidate != desks[p.identifier]!.candidate {
       desks[p.identifier] = d
     }
+    if watching && d.isDesk && (firstThisScan || watchUpdate) { heardWhileWatching(p.identifier) }
   }
 
   func centralManager(_ c: CBCentralManager, didConnect p: CBPeripheral) {

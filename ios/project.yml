@@ -3,20 +3,41 @@ options:
   bundleIdPrefix: net.dreamiurg
   deploymentTarget:
     iOS: "17.0"
+settings:
+  base:
+    DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM}
+    CODE_SIGN_STYLE: Automatic
+    SWIFT_VERSION: "5.0"
+    TARGETED_DEVICE_FAMILY: "1"
 targets:
   DeskBar:
     type: application
     platform: iOS
-    sources: [DeskBar]
+    sources: [DeskBar, Shared]
+    dependencies:
+      - target: DeskBarWidget
+    info:
+      path: DeskBar/Info.plist
+      properties:
+        CFBundleDisplayName: DeskBar
+        UILaunchScreen: {}
+        NSBluetoothAlwaysUsageDescription: DeskBar reads the height of nearby standing desks and watches for new ones.
+        UIBackgroundModes: [bluetooth-central]  # Watch mode: desk-only scan keeps running with the app in the background
+        NSSupportsLiveActivities: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: net.dreamiurg.deskbar.ios
-        DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM}
-        CODE_SIGN_STYLE: Automatic
-        GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription: DeskBar reads the height of nearby standing desks.
-        INFOPLIST_KEY_UILaunchScreen_Generation: YES
-        INFOPLIST_KEY_CFBundleDisplayName: DeskBar
-        TARGETED_DEVICE_FAMILY: "1"
-        SWIFT_VERSION: "5.0"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+  DeskBarWidget:
+    type: app-extension
+    platform: iOS
+    sources: [DeskBarWidget, Shared]
+    info:
+      path: DeskBarWidget/Info.plist
+      properties:
+        CFBundleDisplayName: DeskBar
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: net.dreamiurg.deskbar.ios.widget

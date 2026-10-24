@@ -2,11 +2,12 @@ import SwiftUI
 
 @main
 struct DeskBarApp: App {
+  init() { _ = Scanner.shared }
   var body: some Scene { WindowGroup { ContentView() } }
 }
 
 struct ContentView: View {
-  @StateObject var scanner = Scanner()
+  @ObservedObject var scanner = Scanner.shared
   @State var showAll = false
   @State var search = ""
   @State var expanded: Set<UUID> = []
@@ -66,7 +67,10 @@ struct ContentView: View {
       .refreshable { await scanner.refresh() }
       .searchable(text: $search, prompt: "Search label or ID")
       .onChange(of: scanner.failed) { _, id in if let id { withAnimation { _ = expanded.insert(id) } } }
-      .onChange(of: scenePhase) { _, phase in if phase != .active { scanner.endControl() } }  // never leave a desk connected or moving
+      .onChange(of: scenePhase) { _, phase in
+        if phase != .active { scanner.endControl() }  // never leave a desk connected or moving
+        if phase == .active { scanner.rollDay() }
+      }
       .confirmationDialog("Move this desk?", isPresented: Binding(get: { confirmControl != nil }, set: { if !$0 { confirmControl = nil } }),
                           titleVisibility: .visible, presenting: confirmControl) { d in
         Button("Open Controls") { controlConfirmed = true; scanner.startControl(d.id) }
@@ -135,6 +139,7 @@ struct ContentView: View {
           }
           Spacer()
           if heard { Chip(text: "heard", tint: .blue) }
+          if scanner.newToday.contains(key) { Chip(text: "new", tint: .orange) }
           if scanner.busy == d.id && scanner.controlling != d.id {
             ProgressView()
           } else if d.cm != nil && d.problem == nil {
@@ -399,10 +404,38 @@ struct StatusCard: View {
       }
       .padding(.vertical, 4)
     } else {
-      let updated = scanner.lastRefresh.map { "Updated \($0.formatted(date: .omitted, time: .shortened)) · " } ?? ""
-      Text("\(updated)\(deskCount) desk\(deskCount == 1 ? "" : "s") · pull down to scan")
-        .font(.footnote).foregroundStyle(.secondary)
+      VStack(alignment: .leading, spacing: 10) {
+        Toggle(isOn: Binding(get: { scanner.watching }, set: { $0 ? scanner.startWatching() : scanner.stopWatching() })) {
+          VStack(alignment: .leading, spacing: 2) {
+            Label("Watch for desks", systemImage: "dot.radiowaves.left.and.right").font(.headline)
+            Text(watchSubtitle).font(.caption).foregroundStyle(.secondary)
+          }
+        }
+        .tint(.green)
+        if scanner.watching { TimelineView(.periodic(from: .now, by: 60)) { _ in
+          let near = scanner.nearbyDesks
+          HStack(alignment: .firstTextBaseline, spacing: 24) {
+            stat(near.count, "desks nearby")
+            stat(scanner.newToday.count, "new today")
+            VStack(alignment: .leading, spacing: 2) {
+              Text(near.compactMap(\.lastHeard).max()?.formatted(date: .omitted, time: .shortened) ?? "–")
+                .font(.title2.weight(.bold)).monospacedDigit()
+              Text("last heard").font(.caption).foregroundStyle(.secondary)
+            }
+          }
+        } }
+        let updated = scanner.lastRefresh.map { "Updated \($0.formatted(date: .omitted, time: .shortened)) · " } ?? ""
+        Text("\(updated)\(deskCount) desk\(deskCount == 1 ? "" : "s") · pull down to scan and read heights")
+          .font(.footnote).foregroundStyle(.secondary)
+      }
+      .padding(.vertical, 4)
     }
+  }
+
+  var watchSubtitle: String {
+    guard scanner.watching else { return "Alerts when a desk this phone hasn't seen comes into range. Listens only." }
+    let until = scanner.watchUntil.map { " · ends \($0.formatted(date: .omitted, time: .shortened))" } ?? ""
+    return (scanner.notificationsAllowed ? "Alerts on for new desks" : "Notifications are off in Settings; watching without alerts") + until
   }
 
   func stat(_ n: Int, _ label: String) -> some View {
