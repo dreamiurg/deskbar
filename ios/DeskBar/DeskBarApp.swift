@@ -10,6 +10,7 @@ struct ContentView: View {
   @State var showAll = false
   @State var search = ""
   @State var expanded: Set<UUID> = []
+  @State var showHidden = false
   @State var renaming: Desk?
   @State var nameText = ""
 
@@ -23,12 +24,12 @@ struct ContentView: View {
     search.isEmpty || [title(d), masked(d) ? "" : d.name, d.short].contains { $0.localizedCaseInsensitiveContains(search) }
   }
   func isPinned(_ d: Desk) -> Bool { scanner.pinned.contains(d.id.uuidString) }
-  func isArchived(_ d: Desk) -> Bool { scanner.archived.contains(d.id.uuidString) }
+  func isHidden(_ d: Desk) -> Bool { scanner.hidden.contains(d.id.uuidString) }
 
   var pinned: [Desk] { list { $0.isDesk && isPinned($0) } }
-  var desks: [Desk] { list { $0.isDesk && !isPinned($0) && !isArchived($0) } }
-  var others: [Desk] { showAll ? list { !$0.isDesk && !isArchived($0) } : [] }
-  var archived: [Desk] { list { isArchived($0) } }
+  var desks: [Desk] { list { $0.isDesk && !isPinned($0) && !isHidden($0) } }
+  var others: [Desk] { showAll ? list { !$0.isDesk && !isHidden($0) } : [] }
+  var hiddenDesks: [Desk] { list { isHidden($0) && !isPinned($0) } }
 
   var body: some View {
     NavigationStack {
@@ -37,12 +38,17 @@ struct ContentView: View {
         if !pinned.isEmpty { Section("Pinned") { ForEach(pinned, content: card) } }
         if !desks.isEmpty { Section("Desks · A–Z") { ForEach(desks, content: card) } }
         if !others.isEmpty { Section("Other devices · A–Z") { ForEach(others, content: card) } }
-        if !archived.isEmpty {
-          NavigationLink { List { ForEach(archived, content: card) }.navigationTitle("Archived") } label: {
-            LabeledContent("Archived", value: "\(archived.count)")
+        if !hiddenDesks.isEmpty {
+          // Out of the way at the bottom, collapsed until opened.
+          Section {
+            DisclosureGroup(isExpanded: $showHidden) {
+              ForEach(hiddenDesks, content: card)
+            } label: {
+              LabeledContent("Hidden", value: "\(hiddenDesks.count)").foregroundStyle(.secondary)
+            }
           }
         }
-        Section { } footer: { Text("Tap a desk for details. Swipe right to pin, left to archive.") }
+        Section { } footer: { Text("Tap a desk for details. Swipe right to pin, left to hide.") }
       }
       .overlay {
         if let problem = scanner.bluetoothProblem {
@@ -87,8 +93,8 @@ struct ContentView: View {
     let pinButton = Button(isPinned(d) ? "Unpin" : "Pin", systemImage: isPinned(d) ? "pin.slash" : "pin") {
       scanner.pinned.formSymmetricDifference([key])
     }
-    let archiveButton = Button(isArchived(d) ? "Unarchive" : "Archive", systemImage: "archivebox") {
-      scanner.archived.formSymmetricDifference([key])
+    let hideButton = Button(isHidden(d) ? "Unhide" : "Hide", systemImage: isHidden(d) ? "eye" : "eye.slash") {
+      withAnimation { scanner.hidden.formSymmetricDifference([key]) }
     }
     let rename = { nameText = scanner.labels[key] ?? ""; renaming = d }
     return VStack(alignment: .leading, spacing: 12) {
@@ -141,31 +147,41 @@ struct ContentView: View {
           }
         }
         .font(.footnote)
+        // iOS pattern: one full-width primary action, then equal-width icon-over-label secondary actions.
         Group {
           if d.isDesk {
-            Button(d.problem == nil ? "Read height" : "Try again") { scanner.read([d.id]) }
-              .disabled(scanner.busy == d.id)
+            Button { scanner.read([d.id]) } label: {
+              Label(d.problem == nil ? "Read height" : "Try again", systemImage: "arrow.clockwise").frame(maxWidth: .infinity)
+            }
+            .disabled(scanner.busy == d.id)
           } else {
-            Button("Copy details") { UIPasteboard.general.string = details(d).map { "\($0): \($1)" }.joined(separator: "\n") }
+            Button {
+              UIPasteboard.general.string = details(d).map { "\($0): \($1)" }.joined(separator: "\n")
+            } label: {
+              Label("Copy details", systemImage: "doc.on.doc").frame(maxWidth: .infinity)
+            }
           }
         }
-        .buttonStyle(.borderedProminent).frame(maxWidth: .infinity)
-        // Secondary actions on their own row so long labels ("Unarchive") and large text sizes still fit.
+        .buttonStyle(.borderedProminent).controlSize(.large)
         HStack(spacing: 8) {
-          Button("Rename", action: rename).buttonStyle(.bordered)
-          pinButton.labelStyle(.titleOnly).buttonStyle(.bordered)
-          archiveButton.labelStyle(.titleOnly).buttonStyle(.bordered)
+          ActionTile(title: "Rename", icon: "pencil", action: rename)
+          ActionTile(title: isPinned(d) ? "Unpin" : "Pin", icon: isPinned(d) ? "pin.slash" : "pin") {
+            scanner.pinned.formSymmetricDifference([key])
+          }
+          ActionTile(title: isHidden(d) ? "Unhide" : "Hide", icon: isHidden(d) ? "eye" : "eye.slash") {
+            withAnimation { scanner.hidden.formSymmetricDifference([key]) }
+          }
         }
       }
     }
     .padding(.vertical, 4)
     .swipeActions(edge: .leading) { pinButton.tint(.orange) }
-    .swipeActions(edge: .trailing) { archiveButton.tint(.indigo) }
+    .swipeActions(edge: .trailing) { hideButton.tint(.gray) }
     .contextMenu {
       if d.isDesk { Button("Read Now", systemImage: "arrow.clockwise") { scanner.read([d.id]) } }
       Button("Rename…", systemImage: "pencil", action: rename)
       pinButton
-      archiveButton
+      hideButton
     }
   }
 
@@ -200,7 +216,7 @@ struct ContentView: View {
   func csv() -> String {
     let iso = Self.iso
     // The whole inventory, regardless of the search box.
-    let all = scanner.desks.values.filter { $0.isDesk && !isArchived($0) && $0.cm != nil }
+    let all = scanner.desks.values.filter { $0.isDesk && !isHidden($0) && $0.cm != nil }
       .sorted { scanner.label($0).localizedStandardCompare(scanner.label($1)) == .orderedAscending }
     let lines = all.map { d in
       [safe(scanner.label(d)), safe(d.name), d.family.rawValue, d.short, String(format: "%.1f", d.cm! / 2.54), String(format: "%.1f", d.cm!),
@@ -208,6 +224,23 @@ struct ContentView: View {
         .map { "\"\($0.replacingOccurrences(of: "\"", with: "\"\""))\"" }.joined(separator: ",")
     }
     return (["label,name,manufacturer,short_id,height_in,height_cm,rssi,read_at,id"] + lines).joined(separator: "\n")
+  }
+}
+
+// Equal-width secondary action: icon over a short label, like the action rows in Apple's own apps.
+struct ActionTile: View {
+  let title: String
+  let icon: String
+  let action: () -> Void
+  var body: some View {
+    Button(action: action) {
+      VStack(spacing: 4) {
+        Image(systemName: icon).font(.body)
+        Text(title).font(.caption).lineLimit(1).minimumScaleFactor(0.8)
+      }
+      .frame(maxWidth: .infinity, minHeight: 44)
+    }
+    .buttonStyle(.bordered)
   }
 }
 

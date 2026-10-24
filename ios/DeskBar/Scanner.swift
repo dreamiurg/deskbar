@@ -70,8 +70,9 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
   @Published var pinned = Set(UserDefaults.standard.stringArray(forKey: "pinned") ?? []) {
     didSet { UserDefaults.standard.set(Array(pinned), forKey: "pinned") }
   }
-  @Published var archived = Set(UserDefaults.standard.stringArray(forKey: "archived") ?? []) {
-    didSet { UserDefaults.standard.set(Array(archived), forKey: "archived") }
+  // Stored under "archived", the feature's earlier name, so desks hidden before keep their state.
+  @Published var hidden = Set(UserDefaults.standard.stringArray(forKey: "archived") ?? []) {
+    didSet { UserDefaults.standard.set(Array(hidden), forKey: "archived") }
   }
   @Published var busy: UUID?
   @Published var bluetoothProblem: String?  // nil while Bluetooth is on and allowed
@@ -109,7 +110,7 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
 
   static let scanSeconds = 6
 
-  /// Pull-to-refresh: listen for advertisements, then read every desk heard (pinned and nearby, not archived).
+  /// Pull-to-refresh: listen for advertisements, then read every desk heard (pinned and nearby, not hidden).
   func refresh() async {
     guard central.state == .poweredOn, !scanning, readTotal == 0 else { return }
     scanning = true
@@ -124,7 +125,7 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
     central.stopScan()
     scanning = false
     let ids = desks.values
-      .filter { seenIDs.contains($0.id) && $0.isDesk && !archived.contains($0.id.uuidString) }
+      .filter { seenIDs.contains($0.id) && $0.isDesk && !hidden.contains($0.id.uuidString) }
       .map(\.id)
     readDone = 0; readTotal = ids.count
     read(ids)
