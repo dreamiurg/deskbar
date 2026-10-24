@@ -66,9 +66,7 @@ struct Advert {
     name = (a[CBAdvertisementDataLocalNameKey] as? String) ?? fallbackName
     let uuids = (a[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID]) ?? []
     services = uuids.map(\.uuidString)
-    let lower = name?.lowercased() ?? ""
-    candidate =
-      uuids.contains(linakAdv) || uuids.contains(where: jiecangServices.contains) || deskNames.contains { lower.contains($0) }
+    candidate = looksLikeDesk(name: name, services: services)
     mfg = a[CBAdvertisementDataManufacturerDataKey] as? Data
     txPower = (a[CBAdvertisementDataTxPowerLevelKey] as? NSNumber)?.intValue
     maker = mfg.flatMap { m in m.count >= 2 ? makers[UInt16(m[m.startIndex]) | UInt16(m[m.startIndex + 1]) << 8] : nil }
@@ -91,7 +89,6 @@ let linakHeight = CBUUID(string: "99FA0021-338A-1024-8A49-009C0215F78A")
 let jiecangServices = ["FE60", "FF12", "FF00", "00FF"].map { CBUUID(string: $0) }
 let jiecangWrite = ["FE61", "FF01"].map { CBUUID(string: $0) }
 let jiecangNotify = ["FE62", "FF02"].map { CBUUID(string: $0) }
-let deskNames = ["desk", "uplift", "jiecang", "desky", "apex", "ble device"]
 // Bluetooth SIG company IDs for makers common around an office. Apple devices advertise their owner's name, so they're shown by maker.
 let makers: [UInt16: String] = [
   0x004C: "Apple", 0x0075: "Samsung", 0x0006: "Microsoft", 0x00E0: "Google", 0x0087: "Garmin", 0x012D: "Sony",
@@ -163,7 +160,9 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
       // A failure from an earlier session isn't current; show the last good height instead.
       desks = Dictionary(
         uniqueKeysWithValues: saved.map {
-          var d = $0; d.status = ""; d.problem = nil; return (d.id, d)
+          var d = $0; d.status = ""; d.problem = nil
+          d.candidate = looksLikeDesk(name: d.name, services: d.services ?? [])  // re-check under the current rule
+          return (d.id, d)
         })
     }
     forgetStale()
@@ -359,7 +358,8 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
     let shownRSSI = smoothRSSI(p.identifier, rssi)
     if let r = shownRSSI { d.rssi = r }
     if let name = ad.name { d.name = name }
-    d.candidate = d.candidate || ad.candidate
+    // Re-judged on every update, so a device misclassified by an older rule drops out of Desks.
+    d.candidate = looksLikeDesk(name: d.name, services: d.services ?? ad.services)
     if d != old { desks[p.identifier] = d }  // publishing redraws the list: only on a real change
     if fresh, watching, d.isDesk { heardWhileWatching(p.identifier) }
   }

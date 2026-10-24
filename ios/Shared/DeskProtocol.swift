@@ -46,6 +46,23 @@ struct JiecangReader {
   }
 }
 
+// MARK: Desk detection
+
+/// Services that alone identify a desk controller: FE60 is registered to Lierda (the BLE module in Jiecang
+/// controllers), and the 128-bit one is Linak's own.
+let strongDeskServices: Set<String> = ["FE60", "99FA0001-338A-1024-8A49-009C0215F78A"]
+/// Generic services also used by unrelated gadgets (00FF is the ESP32 sample-app default; Lime scooters advertise it),
+/// so they only count together with the generic "BLE Device …" name these desk modules use.
+let weakDeskServices: Set<String> = ["FF12", "FF00", "00FF"]
+/// Names that alone say "desk".
+let deskNameHints = ["desk", "uplift", "jiecang", "desky", "apex"]
+
+func looksLikeDesk(name: String?, services: [String]) -> Bool {
+  let n = name?.lowercased() ?? ""
+  if services.contains(where: strongDeskServices.contains) || deskNameHints.contains(where: n.contains) { return true }
+  return services.contains(where: weakDeskServices.contains) && n.hasPrefix("ble device")
+}
+
 // MARK: Distance
 
 /// Log-distance model with an indoor path-loss exponent of about 2.7. `oneMetre` is the expected signal at 1 m for this

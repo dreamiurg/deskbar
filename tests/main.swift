@@ -36,6 +36,14 @@ check(Kind.guess(name: "Jane's AirPods Pro", mfg: nil, desk: false) == .earbuds,
 check(Kind.guess(name: nil, mfg: hex("4C0012020000"), desk: false) == .tag, "Find My by Apple Continuity type")
 check(Kind.guess(name: "Office TV", mfg: nil, desk: true) == .desk, "desk wins")
 
+// Desk detection: strong services alone, generic ones only with the "BLE Device" name.
+check(looksLikeDesk(name: "BLE Device 9A1C27", services: ["FE60"]), "Jiecang/Lierda desk")
+check(looksLikeDesk(name: nil, services: ["FE60"]), "FE60 alone is enough (background scans may lack the name)")
+check(looksLikeDesk(name: "BLE Device AB12CD", services: ["00FF"]), "Uplift V3: generic service + desk module name")
+check(!looksLikeDesk(name: "lime-413306575819", services: ["00FF", "00FF"]), "Lime scooter is not a desk")
+check(!looksLikeDesk(name: nil, services: ["FF12"]), "generic service alone is not a desk")
+check(looksLikeDesk(name: "Desky 1234", services: []), "desk name alone")
+
 // Short IDs.
 check(shortID(name: "BLE Device 9A1C27", fallback: "X") == "1C27", "MAC tail from Jiecang name")
 check(shortID(name: "BLE Device-AE267F", fallback: "X") == "267F", "dash separator")
