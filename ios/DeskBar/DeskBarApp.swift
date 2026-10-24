@@ -96,7 +96,17 @@ struct ContentView: View {
 
   // Apple devices advertise their owner's name ("Jane's AirPods"); list them by maker instead.
   func masked(_ d: Desk) -> Bool { !d.isDesk && d.maker == "Apple" && scanner.labels[d.id.uuidString] == nil }
-  func title(_ d: Desk) -> String { masked(d) ? "Apple device" : scanner.label(d) }
+  func title(_ d: Desk) -> String {
+    guard masked(d) else { return scanner.label(d) }
+    switch d.type {
+    case .earbuds: return "Apple earbuds"
+    case .watch: return "Apple Watch"
+    case .tag: return "Find My tag or device"
+    case .tv: return "Apple TV or HomePod"
+    case .phone: return "iPhone, iPad or Mac"
+    default: return "Apple device"
+    }
+  }
 
   func card(_ d: Desk) -> some View {
     let key = d.id.uuidString
@@ -118,7 +128,8 @@ struct ContentView: View {
         HStack(spacing: 10) {
           VStack(alignment: .leading, spacing: 1) {
             Text(title(d)).font(.subheadline.weight(.semibold)).lineLimit(1)
-            (Text((d.isDesk ? d.family.rawValue : d.maker ?? "Unknown maker") + " · ") + Text(d.short).monospaced()
+            // Distance up front so you can tell which desk is which while walking around.
+            (Text("~\(d.feet) ft · ").bold() + Text((d.isDesk ? d.family.rawValue : d.type.rawValue) + " · ") + Text(d.short).monospaced()
               + Text(stale && d.isDesk ? " · not heard in last scan" : ""))
               .font(.caption).foregroundStyle(.secondary).lineLimit(1)
           }
@@ -260,6 +271,7 @@ struct ContentView: View {
       rows.append(("Controller", d.family == .unknown ? "Not identified yet" : d.family.rawValue))
       rows.append(("Keypad unit", d.cm == nil ? "–" : d.shownUnit == "in" ? "inches" : "centimetres"))
     } else {
+      rows.append(("Type", "\(d.type.rawValue) · \(d.type.power)"))
       rows.append(("Maker", d.maker ?? "Unknown"))
     }
     rows.append(("Signal", d.signal))

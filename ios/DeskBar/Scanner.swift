@@ -8,6 +8,62 @@
 import CoreBluetooth
 import Foundation
 
+// Rough device type, guessed from the advertisement. Drives the distance estimate: a TV on mains power is much
+// "louder" than a coin-cell tag, so the same dBm means very different distances.
+enum Kind: String, Codable {
+  case desk = "Desk", phone = "Phone, tablet or computer", watch = "Watch", earbuds = "Earbuds", tag = "Tracker tag"
+  case tv = "TV or speaker", light = "Smart light", other = "Bluetooth device"
+
+  /// Expected signal at 1 m (dBm). Fitted to measurements in a house: desk controller −69 dBm at 0.6 m through a wood
+  /// top and metal frame; iPhone −52 at 0.6 m; TVs −68…−72 at ~5 m through a floor; AirPods −81 and a tag −86 at ~6.5 m
+  /// through a floor and a drawer. Ballpark only.
+  var oneMetre: Double {
+    switch self {
+    case .desk: -75
+    case .phone: -58
+    case .watch: -50
+    case .earbuds: -60
+    case .tag: -64
+    case .tv: -52
+    case .light, .other: -60
+    }
+  }
+
+  var power: String {
+    switch self {
+    case .desk, .tv, .light: "plugged in"
+    case .phone, .watch, .earbuds, .tag: "battery"
+    case .other: "unknown power"
+    }
+  }
+
+  /// Name hints first (they're specific), then Apple's Continuity message type, then "other".
+  static func guess(name: String?, mfg: Data?, desk: Bool) -> Kind {
+    if desk { return .desk }
+    let n = name?.lowercased() ?? ""
+    let hints: [(Kind, [String])] = [
+      (.earbuds, ["airpods", "buds", "beats", "headphone", "earbud"]),
+      (.watch, ["watch", "band", "fitbit", "garmin"]),
+      (.tag, ["tag", "tile", "chipolo"]),
+      (.tv, ["[tv]", " tv", "tv ", "homepod", "minipod", "sonos", "echo", "speaker", "soundbar", "roku"]),
+      (.light, ["govee", "gvh", "ihoment", "hue", "light", "lamp", "bulb", "led", "strip"]),
+      (.phone, ["iphone", "ipad", "macbook", "imac", "pixel", "galaxy", "phone", "laptop"]),
+    ]
+    if let hit = hints.first(where: { _, words in words.contains { n.contains($0) } }) { return hit.0 }
+    // Apple Continuity: company 0x004C, then a message type byte.
+    if let m = mfg, m.count >= 3, m[m.startIndex] == 0x4C, m[m.startIndex + 1] == 0x00 {
+      switch m[m.startIndex + 2] {
+      case 0x07: return .earbuds  // proximity pairing (AirPods, Beats)
+      case 0x12: return .tag  // Find My (AirTag, or an offline Apple device)
+      case 0x09: return .tv  // AirPlay target (Apple TV, HomePod)
+      case 0x10, 0x0C: return .phone  // Nearby Info / Handoff
+      default: break
+      }
+    }
+    return .other
+  }
+}
+
 enum Family: String, Codable { case jiecang = "Jiecang", linak = "Linak", unknown = "Unknown" }
 
 struct Desk: Identifiable, Codable {
@@ -24,19 +80,24 @@ struct Desk: Identifiable, Codable {
   var lastHeard: Date?
   var services: [String]?  // advertised service UUIDs (optional so desks saved by older builds still decode)
   var maker: String?  // from the advertisement's company ID, when known
+  var kind: Kind?  // optional so desks saved by older builds still decode
+  var txPower: Int?  // advertised transmit power, when the device includes it
 
   var isDesk: Bool { candidate || family != .unknown }
 
-  // Distance only for desks: other devices transmit at very different power, so dBm alone says little about them.
-  // Calibrated on a Jiecang/Lierda controller under a wood top with a metal frame: −69 dBm at ~2 ft, −76 dBm at ~3 ft
-  // → about −75 dBm at 1 m, indoor path-loss exponent ≈ 2.7. Roughly ±50%: good for "which desk is this", not measuring.
-  var signal: String {
-    guard isDesk else { return "\(rssi) dBm" }
-    let feet = pow(10, Double(-75 - rssi) / 27) * 3.28
-    let place = rssi > -80 ? "within a few feet" : rssi > -88 ? "nearby" : rssi > -95 ? "same room" : "far"
-    let rounded = feet < 10 ? Int(feet.rounded()) : Int((feet / 5).rounded()) * 5
-    return "\(rssi) dBm · \(place) (~\(max(rounded, 1)) ft)"
+  var type: Kind { isDesk ? .desk : kind ?? .other }
+
+  // Log-distance model, indoor path-loss exponent ≈ 2.7, with a per-type signal at 1 m (or the device's own advertised
+  // transmit power minus the ~41 dB lost over the first metre). Roughly ±50%: tells near from far, not a tape measure.
+  var feet: Int {
+    let oneMetre = txPower.map { Double($0) - 41 } ?? type.oneMetre
+    let ft = pow(10, (oneMetre - Double(rssi)) / 27) * 3.28
+    return max(1, ft < 10 ? Int(ft.rounded()) : Int((ft / 5).rounded()) * 5)
   }
+
+  var place: String { feet <= 5 ? "within a few feet" : feet <= 12 ? "nearby" : feet <= 25 ? "same room" : "far" }
+
+  var signal: String { "\(rssi) dBm · \(place) (~\(feet) ft)" }
 
   // iOS hides MAC addresses; Jiecang modules end their name with the MAC tail ("BLE Device 9A1C27"),
   // otherwise fall back to the end of the iOS-assigned identifier.
@@ -294,6 +355,7 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
     let candidate = services.contains(linakAdv) || services.contains(where: jiecangServices.contains)
       || deskNames.contains { name?.lowercased().contains($0) == true }
     let mfg = a[CBAdvertisementDataManufacturerDataKey] as? Data
+    let txPower = (a[CBAdvertisementDataTxPowerLevelKey] as? NSNumber)?.intValue
     let maker = mfg.flatMap { $0.count >= 2 ? makers[UInt16($0[$0.startIndex]) | UInt16($0[$0.startIndex + 1]) << 8] : nil }
     let firstThisScan = seenIDs.insert(p.identifier).inserted
     if firstThisScan {
@@ -305,7 +367,8 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
       guard name != nil || candidate else { return }
       peripherals[p.identifier] = p
       desks[p.identifier] = Desk(id: p.identifier, name: name ?? "Unnamed", rssi: rssi.intValue, candidate: candidate,
-                                 lastHeard: Date(), services: services.map(\.uuidString), maker: maker)
+                                 lastHeard: Date(), services: services.map(\.uuidString), maker: maker,
+                                 kind: Kind.guess(name: name, mfg: mfg, desk: candidate), txPower: txPower)
       return
     }
     peripherals[p.identifier] = p
@@ -313,6 +376,8 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
       d.lastHeard = Date()
       if !services.isEmpty { d.services = services.map(\.uuidString) }
       if maker != nil { d.maker = maker }
+      d.kind = Kind.guess(name: name ?? d.name, mfg: mfg, desk: d.isDesk || candidate)
+      if txPower != nil { d.txPower = txPower }
     }
     // Advertisements arrive many times a second; publish (and redraw) only real changes, RSSI at most every 2 s.
     let rssiDue = Date().timeIntervalSince(rssiShownAt[p.identifier] ?? .distantPast) > 2
