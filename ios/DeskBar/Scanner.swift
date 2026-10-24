@@ -94,6 +94,7 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
   private var controlTx: CBCharacteristic?
   private var controlType: CBCharacteristicWriteType = .withResponse
   private var holdTimer: Timer?
+  private var moveToken = UUID()  // any Stop replaces it, so a delayed move scheduled before the Stop never fires
 
   private var central: CBCentralManager!
   private var peripherals: [UUID: CBPeripheral] = [:]
@@ -229,6 +230,7 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
   }
 
   func stopMoving() {
+    moveToken = UUID()
     holdTimer?.invalidate()
     holdTimer = nil
     send(0x2B)
@@ -239,7 +241,9 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
     guard controlReady, (500...1400).contains(mm) else { return }
     holdTimer?.invalidate()
     send(0xFE)
-    later(0.3) { self.send(0x1B, [UInt8(mm >> 8), UInt8(mm & 0xFF)]) }
+    let move = UUID()
+    moveToken = move
+    later(0.3) { if self.moveToken == move { self.send(0x1B, [UInt8(mm >> 8), UInt8(mm & 0xFF)]) } }
   }
 
   private func send(_ op: UInt8, _ data: [UInt8] = []) {
