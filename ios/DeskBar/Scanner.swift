@@ -41,7 +41,11 @@ let jiecangWrite = ["FE61", "FF01"].map { CBUUID(string: $0) }
 let jiecangNotify = ["FE62", "FF02"].map { CBUUID(string: $0) }
 let deskNames = ["desk", "uplift", "jiecang", "desky", "apex", "ble device"]
 
-func jiecangFrame(_ op: UInt8) -> Data { Data([0xF1, 0xF1, op, 0x00, op, 0x7E]) }
+// Same encoding as frame() in the mac app's main.swift.
+func jiecangFrame(_ op: UInt8, _ data: [UInt8] = []) -> Data {
+  let body = [op, UInt8(data.count)] + data
+  return Data([0xF1, 0xF1] + body + [UInt8(body.reduce(0) { $0 + Int($1) } & 0xFF), 0x7E])
+}
 
 final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeripheralDelegate {
   @Published var desks: [UUID: Desk] = [:]
@@ -59,6 +63,8 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
   private var central: CBCentralManager!
   private var peripherals: [UUID: CBPeripheral] = [:]
   private var queue: [UUID] = []
+  private var rssiShownAt: [UUID: Date] = [:]
+  private var token = UUID()  // identifies the current read; delayed work from an older read is ignored
   private var buffer = Data()
   private var rawTenths: Int?
   private var unit: UInt8?
@@ -78,20 +84,25 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
   private func next() {
     guard busy == nil, !queue.isEmpty, let p = peripherals[queue.removeFirst()] else { return }
     busy = p.identifier
+    token = UUID()
     buffer = Data(); rawTenths = nil; unit = nil
     desks[p.identifier]?.status = "Connecting…"
     p.delegate = self
     central.connect(p)
-    let id = p.identifier
-    DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self] in
-      if self?.busy == id { self?.finish(p, "No reply") }
+    later(12) { self.finish(p, "No reply") }
+  }
+
+  // Runs `work` after `seconds` only if the same read is still in progress.
+  private func later(_ seconds: Double, _ work: @escaping () -> Void) {
+    let t = token
+    DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
+      if self?.token == t, self?.busy != nil { work() }
     }
   }
 
   private func finish(_ p: CBPeripheral, _ status: String) {
     guard busy == p.identifier else { return }
     desks[p.identifier]?.status = status
-    if status == "OK" { desks[p.identifier]?.readAt = Date() }
     busy = nil
     central.cancelPeripheralConnection(p)
     next()
@@ -111,14 +122,17 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
     let candidate = services.contains(linakAdv) || services.contains(where: jiecangServices.contains)
       || deskNames.contains { name?.lowercased().contains($0) == true }
     peripherals[p.identifier] = p
-    if desks[p.identifier] == nil {
+    guard var d = desks[p.identifier] else {
       guard name != nil || candidate else { return }  // skip anonymous beacons
       desks[p.identifier] = Desk(id: p.identifier, name: name ?? "Unnamed", rssi: rssi.intValue, candidate: candidate)
-    } else {
-      desks[p.identifier]!.rssi = rssi.intValue
-      if let name { desks[p.identifier]!.name = name }
-      desks[p.identifier]!.candidate = desks[p.identifier]!.candidate || candidate
+      return
     }
+    // Advertisements arrive many times a second; publish (and redraw) only real changes, RSSI at most every 2 s.
+    let rssiDue = Date().timeIntervalSince(rssiShownAt[p.identifier] ?? .distantPast) > 2
+    if rssiDue { d.rssi = rssi.intValue; rssiShownAt[p.identifier] = Date() }
+    if let name { d.name = name }
+    d.candidate = d.candidate || candidate
+    if rssiDue || d.name != desks[p.identifier]!.name || d.candidate != desks[p.identifier]!.candidate { desks[p.identifier] = d }
   }
 
   func centralManager(_ c: CBCentralManager, didConnect p: CBPeripheral) {
@@ -156,9 +170,7 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
       // wake (FE60 uses 0xFE, FF* modules 0x00), then status query 0x07 and unit query 0x0E; none move the desk
       let wake: UInt8 = s.uuid == CBUUID(string: "FE60") ? 0xFE : 0x00
       for (i, op) in [wake, 0x07, 0x0E].enumerated() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3 * Double(i + 1)) {
-          p.writeValue(jiecangFrame(op), for: tx, type: type)
-        }
+        later(0.3 * Double(i + 1)) { p.writeValue(jiecangFrame(op), for: tx, type: type) }
       }
       return
     }
@@ -176,6 +188,7 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
       // ponytail: assumes the Idåsen's 62.0 cm minimum; other Linak frames have different bases
       desks[p.identifier]?.cm = 62.0 + Double(Int(v[0]) | Int(v[1]) << 8) / 100
       desks[p.identifier]?.shownUnit = "cm"
+      desks[p.identifier]?.readAt = Date()
       return finish(p, "OK")
     }
     guard jiecangNotify.contains(ch.uuid) else { return }
@@ -185,6 +198,7 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
 
   // Frames can arrive split or merged: F2 F2 op len payload… sum 7E
   private func parseJiecang(_ p: CBPeripheral) {
+    let hadHeight = rawTenths != nil
     while let start = buffer.firstRange(of: Data([0xF2, 0xF2]))?.lowerBound {
       buffer = buffer[start...]
       let b = [UInt8](buffer)
@@ -199,8 +213,9 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
     let inches = unit.map { $0 == 1 } ?? (raw < 550)  // no unit reply: 24–51 in vs 60–130 cm
     desks[p.identifier]?.cm = inches ? Double(raw) / 10 * 2.54 : Double(raw) / 10
     desks[p.identifier]?.shownUnit = inches ? "in" : "cm"
-    if unit != nil { finish(p, "OK") } else {
-      DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.finish(p, "OK") }  // unit reply may not come
+    desks[p.identifier]?.readAt = Date()
+    if unit != nil { finish(p, "OK") } else if !hadHeight {
+      later(1) { self.finish(p, "OK") }  // unit reply may not come
     }
   }
 }

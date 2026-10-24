@@ -57,6 +57,12 @@ struct ContentView: View {
   func row(_ d: Desk) -> some View {
     let key = d.id.uuidString
     let isPinned = scanner.pinned.contains(key), isArchived = scanner.archived.contains(key)
+    let pinButton = Button(isPinned ? "Unpin" : "Pin", systemImage: isPinned ? "pin.slash" : "pin") {
+      scanner.pinned.formSymmetricDifference([key])
+    }
+    let archiveButton = Button(isArchived ? "Unarchive" : "Archive", systemImage: "archivebox") {
+      scanner.archived.formSymmetricDifference([key])
+    }
     return Button { scanner.read([d.id]) } label: {
       HStack {
         VStack(alignment: .leading, spacing: 1) {
@@ -65,45 +71,36 @@ struct ContentView: View {
             .font(.caption).foregroundStyle(.secondary)
         }
         Spacer()
-        if scanner.busy == d.id { ProgressView() } else {
-          Text(d.cm == nil ? (d.status.isEmpty ? "–" : d.status) : d.height)
-            .font(d.cm == nil ? .caption : .title3.weight(.semibold).monospacedDigit())
-            .foregroundStyle(d.cm == nil ? .secondary : .primary)
-            .lineLimit(1)
+        if scanner.busy == d.id { ProgressView() } else if d.cm != nil {
+          Text(d.height).font(.title3.weight(.semibold).monospacedDigit()).lineLimit(1)
+        } else {
+          Text(d.status.isEmpty ? "–" : d.status).font(.caption).foregroundStyle(.secondary).lineLimit(1)
         }
       }
     }
     .foregroundStyle(.primary)
-    .swipeActions(edge: .leading) {
-      Button(isPinned ? "Unpin" : "Pin", systemImage: isPinned ? "pin.slash" : "pin") { toggle(&scanner.pinned, key) }.tint(.orange)
-    }
-    .swipeActions(edge: .trailing) {
-      Button(isArchived ? "Unarchive" : "Archive", systemImage: "archivebox") { toggle(&scanner.archived, key) }.tint(.indigo)
-    }
+    .swipeActions(edge: .leading) { pinButton.tint(.orange) }
+    .swipeActions(edge: .trailing) { archiveButton.tint(.indigo) }
     .contextMenu {
       Button("Read Now", systemImage: "arrow.clockwise") { scanner.read([d.id]) }
       Button("Rename…", systemImage: "pencil") { nameText = scanner.labels[key] ?? ""; renaming = d }
-      Button(isPinned ? "Unpin" : "Pin", systemImage: "pin") { toggle(&scanner.pinned, key) }
-      Button(isArchived ? "Unarchive" : "Archive", systemImage: "archivebox") { toggle(&scanner.archived, key) }
+      pinButton
+      archiveButton
     }
   }
 
-  func toggle(_ set: inout Set<String>, _ key: String) {
-    if set.contains(key) { set.remove(key) } else { set.insert(key) }
-  }
-
   // Advertised names are set by whoever owns the device: keep spreadsheets from running them as formulas.
-  // Checks scalars after leading whitespace/control chars ("\r\n" is one Character, " =x" still evaluates in some apps).
+  // Checked per scalar: a leading space, tab or line break also gets the prefix, since " =x" evaluates in some apps.
   func safe(_ s: String) -> String {
     let skip = CharacterSet.whitespacesAndNewlines.union(.controlCharacters)
-    let leadsWithSkip = s.unicodeScalars.first.map { skip.contains($0) } ?? false
-    let first = s.unicodeScalars.first { !skip.contains($0) }
-    let risky = first.map { "=+-@".unicodeScalars.contains($0) } ?? false
-    return risky || leadsWithSkip ? "'" + s : s
+    let risky = s.unicodeScalars.first.map { skip.contains($0) || "=+-@".unicodeScalars.contains($0) } ?? false
+    return risky ? "'" + s : s
   }
 
+  static let iso = ISO8601DateFormatter()
+
   func csv() -> String {
-    let iso = ISO8601DateFormatter()
+    let iso = Self.iso
     let lines = visible.filter { $0.cm != nil }.map { d in
       [safe(scanner.label(d)), safe(d.name), d.family.rawValue, d.short, String(format: "%.1f", d.cm! / 2.54), String(format: "%.1f", d.cm!),
        "\(d.rssi)", d.readAt.map(iso.string) ?? "", d.id.uuidString]

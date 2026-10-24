@@ -38,20 +38,16 @@ final class App: NSObject, NSApplicationDelegate, CBCentralManagerDelegate, CBPe
   func menuNeedsUpdate(_ menu: NSMenu) {
     menu.removeAllItems()
     let ready = tx != nil
-    for name in ["Stand", "Sit"] {
-      let mi = NSMenuItem(title: "\(name)  \(inches(presets[name]!))", action: #selector(go(_:)), keyEquivalent: "")
-      mi.representedObject = name
-      mi.isEnabled = ready
+    func add(_ title: String, _ action: Selector, _ preset: String, _ enabled: Bool) {
+      let mi = NSMenuItem(title: title, action: action, keyEquivalent: "")
+      mi.representedObject = preset
+      mi.isEnabled = enabled
       menu.addItem(mi)
     }
+    for name in ["Stand", "Sit"] { add("\(name)  \(inches(presets[name]!))", #selector(go(_:)), name, ready) }
     menu.addItem(withTitle: "Stop", action: #selector(stop), keyEquivalent: "").isEnabled = ready
     menu.addItem(.separator())
-    for name in ["Stand", "Sit"] {
-      let mi = NSMenuItem(title: "Save Current Height as \(name)", action: #selector(save(_:)), keyEquivalent: "")
-      mi.representedObject = name
-      mi.isEnabled = tenths != nil
-      menu.addItem(mi)
-    }
+    for name in ["Stand", "Sit"] { add("Save Current Height as \(name)", #selector(save(_:)), name, tenths != nil) }
     menu.addItem(.separator())
     let login = NSMenuItem(title: "Open at Login", action: #selector(toggleLogin), keyEquivalent: "")
     login.state = SMAppService.mainApp.status == .enabled ? .on : .off
@@ -76,9 +72,7 @@ final class App: NSObject, NSApplicationDelegate, CBCentralManagerDelegate, CBPe
 
   @objc func save(_ sender: NSMenuItem) {
     guard let t = tenths else { return }
-    let mm = Int((Double(t) * 2.54).rounded())
-    guard (500...1400).contains(mm) else { return }  // garbage frame; also keeps mm >> 8 within UInt8
-    presets[sender.representedObject as! String] = mm
+    presets[sender.representedObject as! String] = Int((Double(t) * 2.54).rounded())
   }
 
   @objc func toggleLogin() {
@@ -127,8 +121,10 @@ final class App: NSObject, NSApplicationDelegate, CBCentralManagerDelegate, CBPe
 
   func peripheral(_ p: CBPeripheral, didUpdateValueFor ch: CBCharacteristic, error: Error?) {
     guard let v = ch.value.map(Array.init), v.count >= 9, v[0] == 0xF2, v[1] == 0xF2, v[2] == 0x01, v[3] == 0x03 else { return }
-    tenths = Int(v[4]) << 8 | Int(v[5])
-    item.button?.title = String(format: "↕ %.1f″", Double(tenths!) / 10)
+    let t = Int(v[4]) << 8 | Int(v[5])
+    guard (200...600).contains(t) else { return }  // 20–60″: drop garbage frames; also keeps saved mm >> 8 within UInt8
+    tenths = t
+    item.button?.title = String(format: "↕ %.1f″", Double(t) / 10)
   }
 }
 
