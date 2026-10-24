@@ -1,0 +1,9 @@
+{
+  "packages": {
+    ".": {
+      "release-type": "simple",
+      "package-name": "deskbar",
+      "bump-minor-pre-major": true
+    }
+  }
+}

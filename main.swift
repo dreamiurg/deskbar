@@ -53,6 +53,10 @@ final class App: NSObject, NSApplicationDelegate, CBCentralManagerDelegate, CBPe
     let login = NSMenuItem(title: "Open at Login", action: #selector(toggleLogin), keyEquivalent: "")
     login.state = SMAppService.mainApp.status == .enabled ? .on : .off
     menu.addItem(login)
+    let info = Bundle.main.infoDictionary ?? [:]
+    let version = "DeskBar \(info["CFBundleShortVersionString"] as? String ?? "?") (\(info["CFBundleVersion"] as? String ?? "?") · \(info["DeskBarCommit"] as? String ?? "?"))"
+    menu.addItem(.separator())
+    menu.addItem(withTitle: version, action: nil, keyEquivalent: "").isEnabled = false
     menu.addItem(withTitle: "Quit", action: #selector(NSApp.terminate), keyEquivalent: "q")
     menu.items.forEach { if $0.action != #selector(NSApp.terminate) { $0.target = self } }
   }

@@ -54,7 +54,12 @@ struct ContentView: View {
             }
           }
         }
-        Section { } footer: { Text("Tap a desk for details. Swipe right to pin, left to hide.") }
+        Section { } footer: {
+          VStack(alignment: .leading, spacing: 8) {
+            Text("Tap a desk for details. Swipe right to pin, left to hide.")
+            Text(appVersion).font(.caption2).monospacedDigit().textSelection(.enabled)
+          }
+        }
       }
       .overlay {
         if let problem = scanner.bluetoothProblem {
@@ -359,6 +364,15 @@ struct ActionTile: View {
     .buttonStyle(.bordered)
   }
 }
+
+// Stamped at build time by stamp-version.sh: release version (version.txt), build = commit count, commit hash.
+let appVersion: String = {
+  let info = Bundle.main.infoDictionary ?? [:]
+  let version = info["CFBundleShortVersionString"] as? String ?? "?"
+  let build = info["CFBundleVersion"] as? String ?? "?"
+  let commit = info["DeskBarCommit"] as? String ?? "?"
+  return "DeskBar \(version) (\(build) · \(commit))"
+}()
 
 struct Chip: View {
   let text: String

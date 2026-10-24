@@ -1,0 +1,17 @@
+# Keeps a release PR open with the changelog and next version, derived from conventional commits (feat:, fix:).
+# Merging that PR tags vX.Y.Z, publishes a GitHub release and bumps version.txt, which the builds stamp into both apps.
+name: release-please
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json

@@ -9,6 +9,7 @@ settings:
     CODE_SIGN_STYLE: Automatic
     SWIFT_VERSION: "5.0"
     TARGETED_DEVICE_FAMILY: "1"
+    ENABLE_USER_SCRIPT_SANDBOXING: NO  # the version stamp reads git and writes the built Info.plist
 targets:
   DeskBar:
     type: application
@@ -16,6 +17,10 @@ targets:
     sources: [DeskBar, Shared]
     dependencies:
       - target: DeskBarWidget
+    postBuildScripts:
+      - name: Stamp version
+        script: '"$SRCROOT/../stamp-version.sh" "$TARGET_BUILD_DIR/$INFOPLIST_PATH"'
+        basedOnDependencyAnalysis: false
     info:
       path: DeskBar/Info.plist
       properties:
@@ -32,6 +37,10 @@ targets:
     type: app-extension
     platform: iOS
     sources: [DeskBarWidget, Shared]
+    postBuildScripts:
+      - name: Stamp version
+        script: '"$SRCROOT/../stamp-version.sh" "$TARGET_BUILD_DIR/$INFOPLIST_PATH"'
+        basedOnDependencyAnalysis: false
     info:
       path: DeskBarWidget/Info.plist
       properties:
