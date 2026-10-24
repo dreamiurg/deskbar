@@ -93,7 +93,14 @@ struct ContentView: View {
   }
 
   // Advertised names are set by whoever owns the device: keep spreadsheets from running them as formulas.
-  func safe(_ s: String) -> String { "=+-@\t\r".contains(s.first ?? " ") ? "'" + s : s }
+  // Checks scalars after leading whitespace/control chars ("\r\n" is one Character, " =x" still evaluates in some apps).
+  func safe(_ s: String) -> String {
+    let skip = CharacterSet.whitespacesAndNewlines.union(.controlCharacters)
+    let leadsWithSkip = s.unicodeScalars.first.map { skip.contains($0) } ?? false
+    let first = s.unicodeScalars.first { !skip.contains($0) }
+    let risky = first.map { "=+-@".unicodeScalars.contains($0) } ?? false
+    return risky || leadsWithSkip ? "'" + s : s
+  }
 
   func csv() -> String {
     let iso = ISO8601DateFormatter()
