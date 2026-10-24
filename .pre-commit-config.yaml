@@ -1,0 +1,61 @@
+# Two stages: fast checks on every commit, builds and logic tests before every push.
+# Install once: pre-commit install && pre-commit install --hook-type pre-push
+exclude: ^ios/build/
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-merge-conflict
+      - id: no-commit-to-branch
+        args: [--branch, main]
+      - id: check-added-large-files
+        args: [--maxkb=500]
+      - id: detect-private-key
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+
+  - repo: local
+    hooks:
+      # Commit stage: seconds, not minutes
+      - id: swift-format
+        name: swift-format (fixes in place)
+        entry: xcrun swift-format format --in-place --configuration .swift-format
+        language: system
+        types: [swift]
+      - id: swiftlint
+        name: swiftlint
+        entry: swiftlint lint --strict --quiet
+        language: system
+        types: [swift]
+        pass_filenames: false
+      - id: complexity
+        name: complexity (lizard)
+        entry: make complexity
+        language: system
+        types: [swift]
+        pass_filenames: false
+      - id: semgrep
+        name: semgrep SAST
+        entry: semgrep scan --config auto --error --quiet
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+      # Push stage: the slower checks that CI can't run cheaply (it has no macOS runner)
+      - id: logic-tests
+        name: logic tests
+        entry: make test
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+      - id: typecheck
+        name: typecheck Mac and iOS apps
+        entry: make typecheck
+        language: system
+        pass_filenames: false
+        stages: [pre-push]

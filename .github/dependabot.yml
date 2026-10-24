@@ -1,0 +1,15 @@
+# The apps have no package dependencies; only the workflow actions need updating.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    cooldown:
+      default-days: 7  # never propose a version less than a week old (supply-chain defence)
+    commit-message:
+      prefix: "ci(deps)"
+    groups:
+      actions:
+        patterns: ["*"]

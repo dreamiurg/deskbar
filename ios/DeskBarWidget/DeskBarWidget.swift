@@ -50,8 +50,10 @@ struct LockScreenView: View {
       } else {
         Stats(state: state)
         if let t = state.lastHeard {
-          Text("Last heard \(t.formatted(date: .omitted, time: .shortened))\(state.closestLabel.map { " · \($0) is closest" } ?? "")")
-            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+          Text(
+            "Last heard \(t.formatted(date: .omitted, time: .shortened))\(state.closestLabel.map { " · \($0) is closest" } ?? "")"
+          )
+          .font(.caption).foregroundStyle(.secondary).lineLimit(1)
         }
       }
     }

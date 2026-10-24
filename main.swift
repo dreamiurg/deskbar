@@ -54,7 +54,8 @@ final class App: NSObject, NSApplicationDelegate, CBCentralManagerDelegate, CBPe
     login.state = SMAppService.mainApp.status == .enabled ? .on : .off
     menu.addItem(login)
     let info = Bundle.main.infoDictionary ?? [:]
-    let version = "DeskBar \(info["CFBundleShortVersionString"] as? String ?? "?") (\(info["CFBundleVersion"] as? String ?? "?") · \(info["DeskBarCommit"] as? String ?? "?"))"
+    let field = { (key: String) in info[key] as? String ?? "?" }
+    let version = "DeskBar \(field("CFBundleShortVersionString")) (\(field("CFBundleVersion")) · \(field("DeskBarCommit")))"
     menu.addItem(.separator())
     menu.addItem(withTitle: version, action: nil, keyEquivalent: "").isEnabled = false
     menu.addItem(withTitle: "Quit", action: #selector(NSApp.terminate), keyEquivalent: "q")
@@ -66,7 +67,7 @@ final class App: NSObject, NSApplicationDelegate, CBCentralManagerDelegate, CBPe
   func send(_ d: Data) { if let p = desk, let c = tx { p.writeValue(d, for: c, type: .withResponse) } }
 
   @objc func go(_ sender: NSMenuItem) {
-    let mm = presets[sender.representedObject as! String]!
+    guard let name = sender.representedObject as? String, let mm = presets[name] else { return }
     send(frame(0xFE))  // wake: controller ignores commands while its display sleeps
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
       self.send(frame(0x1B, [UInt8(mm >> 8), UInt8(mm & 0xFF)]))
@@ -76,8 +77,8 @@ final class App: NSObject, NSApplicationDelegate, CBCentralManagerDelegate, CBPe
   @objc func stop() { send(frame(0x2B)) }
 
   @objc func save(_ sender: NSMenuItem) {
-    guard let t = tenths else { return }
-    presets[sender.representedObject as! String] = Int((Double(t) * 2.54).rounded())
+    guard let t = tenths, let name = sender.representedObject as? String else { return }
+    presets[name] = Int((Double(t) * 2.54).rounded())
   }
 
   // Unpins the desk and connects to the next FE60 desk found (e.g. after replacing the controller).
@@ -90,7 +91,7 @@ final class App: NSObject, NSApplicationDelegate, CBCentralManagerDelegate, CBPe
 
   @objc func toggleLogin() {
     let s = SMAppService.mainApp
-    try? s.status == .enabled ? s.unregister() : s.register()
+    if s.status == .enabled { try? s.unregister() } else { try? s.register() }
   }
 
   // MARK: Bluetooth

@@ -1,0 +1,26 @@
+# Lint rules: SwiftLint defaults, tuned to this codebase's existing style (2-space indent, compact one-liners).
+included: [main.swift, ios/DeskBar, ios/Shared, ios/DeskBarWidget, tests]
+excluded: [ios/build]
+disabled_rules:
+  - identifier_name        # short names like p, d, s, v are idiomatic in CoreBluetooth delegate callbacks
+  - opening_brace          # conflicts with the formatter's handling of multi-line conditions
+  - trailing_comma         # swift-format owns trailing commas (it adds them to multi-line literals)
+line_length:
+  warning: 130
+  error: 160
+  ignores_comments: true
+type_body_length:
+  warning: 400
+  error: 600
+file_length:
+  warning: 700
+  error: 900
+function_body_length:
+  warning: 60
+  error: 100
+cyclomatic_complexity:
+  warning: 15
+  error: 25
+function_parameter_count:
+  warning: 5
+  error: 7

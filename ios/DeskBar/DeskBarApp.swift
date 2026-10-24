@@ -54,7 +54,8 @@ struct ContentView: View {
             }
           }
         }
-        Section { } footer: {
+        Section {
+        } footer: {
           VStack(alignment: .leading, spacing: 8) {
             Text("Tap a desk for details. Swipe right to pin, left to hide.")
             Text(appVersion).font(.caption2).monospacedDigit().textSelection(.enabled)
@@ -65,8 +66,9 @@ struct ContentView: View {
         if let problem = scanner.bluetoothProblem {
           ContentUnavailableView("Bluetooth unavailable", systemImage: "exclamationmark.triangle", description: Text(problem))
         } else if scanner.desks.isEmpty && !scanner.scanning && scanner.readTotal == 0 {
-          ContentUnavailableView("No desks yet", systemImage: "arrow.down",
-                                 description: Text("Pull down to scan for nearby desks."))
+          ContentUnavailableView(
+            "No desks yet", systemImage: "arrow.down",
+            description: Text("Pull down to scan for nearby desks."))
         }
       }
       .refreshable { await scanner.refresh() }
@@ -76,9 +78,13 @@ struct ContentView: View {
         if phase != .active { scanner.endControl() }  // never leave a desk connected or moving
         if phase == .active { scanner.rollDay() }
       }
-      .confirmationDialog("Move this desk?", isPresented: Binding(get: { confirmControl != nil }, set: { if !$0 { confirmControl = nil } }),
-                          titleVisibility: .visible, presenting: confirmControl) { d in
-        Button("Open Controls") { controlConfirmed = true; scanner.startControl(d.id) }
+      .confirmationDialog(
+        "Move this desk?", isPresented: Binding(get: { confirmControl != nil }, set: { if !$0 { confirmControl = nil } }),
+        titleVisibility: .visible, presenting: confirmControl
+      ) { d in
+        Button("Open Controls") {
+          controlConfirmed = true; scanner.startControl(d.id)
+        }
         Button("Cancel", role: .cancel) {}
       } message: { _ in
         Text("Make sure nothing and no one is in the desk's way. The desk stays connected to this phone until you tap Done.")
@@ -118,117 +124,139 @@ struct ContentView: View {
   }
 
   func card(_ d: Desk) -> some View {
-    let key = d.id.uuidString
-    let open = expanded.contains(d.id)
-    let stale = scanner.scanStarted.map { (d.lastHeard ?? .distantPast) < $0 } ?? false
-    let heard = scanner.scanning && !stale
-    let pinButton = Button(isPinned(d) ? "Unpin" : "Pin", systemImage: isPinned(d) ? "pin.slash" : "pin") {
-      scanner.pinned.formSymmetricDifference([key])
-    }
-    let hideButton = Button(isHidden(d) ? "Unhide" : "Hide", systemImage: isHidden(d) ? "eye" : "eye.slash") {
-      withAnimation { scanner.hidden.formSymmetricDifference([key]) }
-    }
-    let rename = { nameText = scanner.labels[key] ?? ""; renaming = d }
-    return VStack(alignment: .leading, spacing: 12) {
-      Button {
-        if open && scanner.controlling == d.id { scanner.endControl() }  // collapsing closes the controls
-        withAnimation(.snappy) { expanded.formSymmetricDifference([d.id]) }
-      } label: {
-        HStack(spacing: 10) {
-          VStack(alignment: .leading, spacing: 1) {
-            Text(title(d)).font(.subheadline.weight(.semibold)).lineLimit(1)
-            // Distance up front so you can tell which desk is which while walking around.
-            (Text("~\(d.feet) ft · ").bold() + Text((d.isDesk ? d.family.rawValue : d.type.rawValue) + " · ") + Text(d.short).monospaced()
-              + Text(stale && d.isDesk ? " · not heard in last scan" : ""))
-              .font(.caption).foregroundStyle(.secondary).lineLimit(1)
-          }
-          Spacer()
-          if heard { Chip(text: "heard", tint: .blue) }
-          if scanner.newToday.contains(key) { Chip(text: "new", tint: .orange) }
-          if scanner.busy == d.id && scanner.controlling != d.id {
-            ProgressView()
-          } else if d.cm != nil && d.problem == nil {
-            Text(d.height).font(.title3.weight(.semibold).monospacedDigit())
-              .foregroundStyle(stale ? .secondary : .primary)
-          } else if !d.status.isEmpty && d.status != "Connecting…" && d.status != "Reading…" {
-            Chip(text: d.status, tint: d.problem == nil ? .gray : .orange)
-          }
-          Image(systemName: "chevron.down").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
-            .rotationEffect(.degrees(open ? 180 : 0))
-        }
-        .contentShape(Rectangle())
-      }
-      .buttonStyle(.plain)
-      .accessibilityHint(open ? "Collapses details" : "Shows details")
-      // Only the header: a long press anywhere in the card would steal the hold on Raise/Lower/presets.
-      .contextMenu {
-        if d.isDesk { Button("Read Now", systemImage: "arrow.clockwise") { scanner.read([d.id]) } }
-        Button("Rename…", systemImage: "pencil", action: rename)
-        pinButton
-        hideButton
-      }
-
-      if open {
-        if let problem = d.problem {
-          VStack(alignment: .leading, spacing: 6) {
-            Text(problem).font(.subheadline)
-            if d.cm != nil, let at = d.readAt {
-              Text("Last good reading: \(d.height), \(at.formatted(.relative(presentation: .named)))")
-                .font(.caption).foregroundStyle(.secondary)
-            }
-          }
-          .padding(12).frame(maxWidth: .infinity, alignment: .leading)
-          .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
-        }
-        Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
-          ForEach(details(d), id: \.0) { k, v in
-            GridRow {
-              Text(k).foregroundStyle(.secondary)
-              Text(v).fontWeight(.medium).lineLimit(2)
-            }
-          }
-        }
-        .font(.footnote)
-        if scanner.controlling == d.id {
-          controls(d)
-        }
-        // iOS pattern: one full-width primary action, then equal-width icon-over-label secondary actions.
-        if scanner.controlling != d.id { Group {
-          if d.isDesk {
-            Button { scanner.read([d.id]) } label: {
-              Label(d.problem == nil ? "Read height" : "Try again", systemImage: "arrow.clockwise").frame(maxWidth: .infinity)
-            }
-            .disabled(scanner.busy == d.id)
-          } else {
-            Button {
-              UIPasteboard.general.string = details(d).map { "\($0): \($1)" }.joined(separator: "\n")
-            } label: {
-              Label("Copy details", systemImage: "doc.on.doc").frame(maxWidth: .infinity)
-            }
-          }
-        }
-        .buttonStyle(.borderedProminent).controlSize(.large) }
-        HStack(spacing: 8) {
-          if d.family == .jiecang && scanner.controlling != d.id {
-            ActionTile(title: "Control", icon: "arrow.up.and.down") {
-              if controlConfirmed { scanner.startControl(d.id) } else { confirmControl = d }
-            }
-            .disabled(scanner.busy != nil)
-          }
-          ActionTile(title: "Rename", icon: "pencil", action: rename)
-          ActionTile(title: isPinned(d) ? "Unpin" : "Pin", icon: isPinned(d) ? "pin.slash" : "pin") {
-            scanner.pinned.formSymmetricDifference([key])
-          }
-          ActionTile(title: isHidden(d) ? "Unhide" : "Hide", icon: isHidden(d) ? "eye" : "eye.slash") {
-            withAnimation { scanner.hidden.formSymmetricDifference([key]) }
-          }
-        }
-      }
+    VStack(alignment: .leading, spacing: 12) {
+      cardHeader(d)
+      if expanded.contains(d.id) { cardBody(d) }
     }
     .padding(.vertical, 4)
     // No swipes while the desk is under control: a sideways drag on Raise/Lower must not turn into a swipe.
-    .swipeActions(edge: .leading) { if scanner.controlling != d.id { pinButton.tint(.orange) } }
-    .swipeActions(edge: .trailing) { if scanner.controlling != d.id { hideButton.tint(.gray) } }
+    .swipeActions(edge: .leading) { if scanner.controlling != d.id { pinButton(d).tint(.orange) } }
+    .swipeActions(edge: .trailing) { if scanner.controlling != d.id { hideButton(d).tint(.gray) } }
+  }
+
+  func isStale(_ d: Desk) -> Bool { scanner.scanStarted.map { (d.lastHeard ?? .distantPast) < $0 } ?? false }
+
+  func togglePin(_ d: Desk) { scanner.pinned.formSymmetricDifference([d.id.uuidString]) }
+  func toggleHide(_ d: Desk) { withAnimation { _ = scanner.hidden.formSymmetricDifference([d.id.uuidString]) } }
+  func rename(_ d: Desk) {
+    nameText = scanner.labels[d.id.uuidString] ?? ""
+    renaming = d
+  }
+
+  func pinButton(_ d: Desk) -> some View {
+    Button(isPinned(d) ? "Unpin" : "Pin", systemImage: isPinned(d) ? "pin.slash" : "pin") { togglePin(d) }
+  }
+  func hideButton(_ d: Desk) -> some View {
+    Button(isHidden(d) ? "Unhide" : "Hide", systemImage: isHidden(d) ? "eye" : "eye.slash") { toggleHide(d) }
+  }
+
+  // Tapping the header expands or collapses the card; it never connects.
+  func cardHeader(_ d: Desk) -> some View {
+    let open = expanded.contains(d.id)
+    let stale = isStale(d)
+    return Button {
+      if open && scanner.controlling == d.id { scanner.endControl() }  // collapsing closes the controls
+      withAnimation(.snappy) { expanded.formSymmetricDifference([d.id]) }
+    } label: {
+      HStack(spacing: 10) {
+        VStack(alignment: .leading, spacing: 1) {
+          Text(title(d)).font(.subheadline.weight(.semibold)).lineLimit(1)
+          // Distance up front so you can tell which desk is which while walking around.
+          (Text("~\(d.feet) ft · ").bold() + Text((d.isDesk ? d.family.rawValue : d.type.rawValue) + " · ")
+            + Text(d.short).monospaced()
+            + Text(stale && d.isDesk ? " · not heard in last scan" : ""))
+            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+        }
+        Spacer()
+        if scanner.scanning && !stale { Chip(text: "heard", tint: .blue) }
+        if scanner.newToday.contains(d.id.uuidString) { Chip(text: "new", tint: .orange) }
+        headerTrailing(d, stale: stale)
+        Image(systemName: "chevron.down").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+          .rotationEffect(.degrees(open ? 180 : 0))
+      }
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .accessibilityHint(open ? "Collapses details" : "Shows details")
+    // Only the header: a long press anywhere in the card would steal the hold on Raise/Lower/presets.
+    .contextMenu {
+      if d.isDesk { Button("Read Now", systemImage: "arrow.clockwise") { scanner.read([d.id]) } }
+      Button("Rename…", systemImage: "pencil") { rename(d) }
+      pinButton(d)
+      hideButton(d)
+    }
+  }
+
+  // Spinner while reading, else the height, else a status chip.
+  @ViewBuilder func headerTrailing(_ d: Desk, stale: Bool) -> some View {
+    if scanner.busy == d.id && scanner.controlling != d.id {
+      ProgressView()
+    } else if d.cm != nil && d.problem == nil {
+      Text(d.height).font(.title3.weight(.semibold).monospacedDigit())
+        .foregroundStyle(stale ? .secondary : .primary)
+    } else if !d.status.isEmpty && d.status != "Connecting…" && d.status != "Reading…" {
+      Chip(text: d.status, tint: d.problem == nil ? .gray : .orange)
+    }
+  }
+
+  @ViewBuilder func cardBody(_ d: Desk) -> some View {
+    if let problem = d.problem {
+      VStack(alignment: .leading, spacing: 6) {
+        Text(problem).font(.subheadline)
+        if d.cm != nil, let at = d.readAt {
+          Text("Last good reading: \(d.height), \(at.formatted(.relative(presentation: .named)))")
+            .font(.caption).foregroundStyle(.secondary)
+        }
+      }
+      .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+      .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+    }
+    Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
+      ForEach(details(d), id: \.0) { k, v in
+        GridRow {
+          Text(k).foregroundStyle(.secondary)
+          Text(v).fontWeight(.medium).lineLimit(2)
+        }
+      }
+    }
+    .font(.footnote)
+    if scanner.controlling == d.id {
+      controls(d)
+    } else {
+      primaryAction(d)
+    }
+    HStack(spacing: 8) {
+      if d.family == .jiecang && scanner.controlling != d.id {
+        ActionTile(title: "Control", icon: "arrow.up.and.down") {
+          if controlConfirmed { scanner.startControl(d.id) } else { confirmControl = d }
+        }
+        .disabled(scanner.busy != nil)
+      }
+      ActionTile(title: "Rename", icon: "pencil") { rename(d) }
+      ActionTile(title: isPinned(d) ? "Unpin" : "Pin", icon: isPinned(d) ? "pin.slash" : "pin") { togglePin(d) }
+      ActionTile(title: isHidden(d) ? "Unhide" : "Hide", icon: isHidden(d) ? "eye" : "eye.slash") { toggleHide(d) }
+    }
+  }
+
+  // iOS pattern: one full-width primary action, then equal-width icon-over-label secondary actions.
+  @ViewBuilder func primaryAction(_ d: Desk) -> some View {
+    Group {
+      if d.isDesk {
+        Button {
+          scanner.read([d.id])
+        } label: {
+          Label(d.problem == nil ? "Read height" : "Try again", systemImage: "arrow.clockwise").frame(maxWidth: .infinity)
+        }
+        .disabled(scanner.busy == d.id)
+      } else {
+        Button {
+          UIPasteboard.general.string = details(d).map { "\($0): \($1)" }.joined(separator: "\n")
+        } label: {
+          Label("Copy details", systemImage: "doc.on.doc").frame(maxWidth: .infinity)
+        }
+      }
+    }
+    .buttonStyle(.borderedProminent).controlSize(.large)
   }
 
   // Live height plus hold-to-move, Stop and presets, shown while the desk is connected for control.
@@ -246,7 +274,9 @@ struct ContentView: View {
         HoldButton(title: "Lower", icon: "arrow.down") { $0 ? scanner.hold(up: false) : scanner.stopMoving() }
       }
       .disabled(!ready)
-      Button { scanner.stopMoving() } label: {
+      Button {
+        scanner.stopMoving()
+      } label: {
         Label("Stop", systemImage: "stop.fill").frame(maxWidth: .infinity)
       }
       .buttonStyle(.borderedProminent).tint(.red).controlSize(.large)
@@ -294,14 +324,6 @@ struct ContentView: View {
     return rows
   }
 
-  // Advertised names are set by whoever owns the device: keep spreadsheets from running them as formulas.
-  // Checked per scalar: a leading space, tab or line break also gets the prefix, since " =x" evaluates in some apps.
-  func safe(_ s: String) -> String {
-    let skip = CharacterSet.whitespacesAndNewlines.union(.controlCharacters)
-    let risky = s.unicodeScalars.first.map { skip.contains($0) || "=+-@".unicodeScalars.contains($0) } ?? false
-    return risky ? "'" + s : s
-  }
-
   static let iso = ISO8601DateFormatter()
 
   func csv() -> String {
@@ -310,9 +332,12 @@ struct ContentView: View {
     let all = scanner.desks.values.filter { $0.isDesk && !isHidden($0) && $0.cm != nil }
       .sorted { scanner.label($0).localizedStandardCompare(scanner.label($1)) == .orderedAscending }
     let lines = all.map { d in
-      [safe(scanner.label(d)), safe(d.name), d.family.rawValue, d.short, String(format: "%.1f", d.cm! / 2.54), String(format: "%.1f", d.cm!),
-       "\(d.rssi)", d.readAt.map(iso.string) ?? "", d.id.uuidString]
-        .map { "\"\($0.replacingOccurrences(of: "\"", with: "\"\""))\"" }.joined(separator: ",")
+      [
+        csvSafe(scanner.label(d)), csvSafe(d.name), d.family.rawValue, d.short, String(format: "%.1f", d.cm! / 2.54),
+        String(format: "%.1f", d.cm!),
+        "\(d.rssi)", d.readAt.map(iso.string) ?? "", d.id.uuidString,
+      ]
+      .map { "\"\($0.replacingOccurrences(of: "\"", with: "\"\""))\"" }.joined(separator: ",")
     }
     return (["label,name,manufacturer,short_id,height_in,height_cm,rssi,read_at,id"] + lines).joined(separator: "\n")
   }
@@ -324,7 +349,8 @@ struct HoldButton: View {
   let icon: String
   let onPress: (Bool) -> Void
   var body: some View {
-    Button {} label: {
+    Button {
+    } label: {
       VStack(spacing: 4) {
         Image(systemName: icon).font(.title2.weight(.semibold))
         Text(title).font(.subheadline)
@@ -342,8 +368,10 @@ struct HoldStyle: ButtonStyle {
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
       .foregroundStyle(enabled ? Color.accentColor : .secondary)
-      .background(configuration.isPressed ? Color.accentColor.opacity(0.25) : Color(.tertiarySystemFill),
-                  in: RoundedRectangle(cornerRadius: 12))
+      .background(
+        configuration.isPressed ? Color.accentColor.opacity(0.25) : Color(.tertiarySystemFill),
+        in: RoundedRectangle(cornerRadius: 12)
+      )
       .onChange(of: configuration.isPressed) { _, pressed in onPress(pressed) }
   }
 }
@@ -426,18 +454,20 @@ struct StatusCard: View {
           }
         }
         .tint(.green)
-        if scanner.watching { TimelineView(.periodic(from: .now, by: 60)) { _ in
-          let near = scanner.nearbyDesks
-          HStack(alignment: .firstTextBaseline, spacing: 24) {
-            stat(near.count, "desks nearby")
-            stat(scanner.newToday.count, "new today")
-            VStack(alignment: .leading, spacing: 2) {
-              Text(near.compactMap(\.lastHeard).max()?.formatted(date: .omitted, time: .shortened) ?? "–")
-                .font(.title2.weight(.bold)).monospacedDigit()
-              Text("last heard").font(.caption).foregroundStyle(.secondary)
+        if scanner.watching {
+          TimelineView(.periodic(from: .now, by: 60)) { _ in
+            let near = scanner.nearbyDesks
+            HStack(alignment: .firstTextBaseline, spacing: 24) {
+              stat(near.count, "desks nearby")
+              stat(scanner.newToday.count, "new today")
+              VStack(alignment: .leading, spacing: 2) {
+                Text(near.compactMap(\.lastHeard).max()?.formatted(date: .omitted, time: .shortened) ?? "–")
+                  .font(.title2.weight(.bold)).monospacedDigit()
+                Text("last heard").font(.caption).foregroundStyle(.secondary)
+              }
             }
           }
-        } }
+        }
         let updated = scanner.lastRefresh.map { "Updated \($0.formatted(date: .omitted, time: .shortened)) · " } ?? ""
         Text("\(updated)\(deskCount) desk\(deskCount == 1 ? "" : "s") · pull down to scan and read heights")
           .font(.footnote).foregroundStyle(.secondary)
@@ -449,7 +479,9 @@ struct StatusCard: View {
   var watchSubtitle: String {
     guard scanner.watching else { return "Alerts when a desk this phone hasn't seen comes into range. Listens only." }
     let until = scanner.watchUntil.map { " · ends \($0.formatted(date: .omitted, time: .shortened))" } ?? ""
-    return (scanner.notificationsAllowed ? "Alerts on for new desks" : "Notifications are off in Settings; watching without alerts") + until
+    return
+      (scanner.notificationsAllowed ? "Alerts on for new desks" : "Notifications are off in Settings; watching without alerts")
+      + until
   }
 
   func stat(_ n: Int, _ label: String) -> some View {

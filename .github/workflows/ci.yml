@@ -1,0 +1,57 @@
+# Cheap checks only: Linux runners. Building the apps needs macOS (billed at 10x), so builds and typechecks run in
+# the local pre-push hook instead. Jobs are few on purpose: each one is billed at least a minute.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  swift:
+    name: Format and logic tests
+    runs-on: ubuntu-latest
+    container: swift:6.3
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+      - name: swift-format
+        run: swift format lint --strict --recursive --configuration .swift-format main.swift ios/DeskBar ios/Shared ios/DeskBarWidget tests
+      - name: Logic tests
+        run: ./tests/run-logic-tests.sh
+
+  checks:
+    name: Lint, secrets, SAST, complexity
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          fetch-depth: 0  # gitleaks scans history
+      - name: SwiftLint
+        run: docker run --rm -v "$PWD:/repo" -w /repo ghcr.io/realm/swiftlint:0.63.2 swiftlint lint --strict --quiet
+      - name: gitleaks
+        run: docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.30.1 git /repo --redact
+      - name: Semgrep and lizard
+        run: |
+          pip install --quiet semgrep==1.181.0 lizard==1.24.3
+          semgrep scan --config auto --error --quiet .
+          lizard -l swift -C 15 -L 60 -a 5 -w main.swift ios/DeskBar ios/Shared ios/DeskBarWidget tests
+
+  # SENTINEL: the only required check in branch protection
+  required-checks:
+    name: Required Checks
+    runs-on: ubuntu-latest
+    needs: [swift, checks]
+    if: always()
+    steps:
+      - name: Check results
+        run: exit 1
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
