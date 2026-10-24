@@ -41,6 +41,8 @@ struct Desk: Identifiable, Codable {
     return mac ? String(tail.suffix(4)).uppercased() : String(id.uuidString.suffix(4))
   }
 
+  static func inches(_ mm: Int) -> String { String(format: "%.1f″", Double(mm) / 25.4) }
+
   var height: String {
     guard let cm else { return "–" }
     return shownUnit == "in" ? String(format: "%.1f″", cm / 2.54) : String(format: "%.1f cm", cm)
@@ -86,6 +88,12 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
   @Published var lastRefresh = UserDefaults.standard.object(forKey: "lastRefresh") as? Date
   @Published var scanStarted = UserDefaults.standard.object(forKey: "scanStarted") as? Date
   @Published var failed: UUID?  // last desk whose read failed, so the page can open its card
+  // Height control (Jiecang): one connection held open while a desk's controls are shown.
+  @Published var controlling: UUID?
+  @Published var controlReady = false  // connected and the desk's command channel found
+  private var controlTx: CBCharacteristic?
+  private var controlType: CBCharacteristicWriteType = .withResponse
+  private var holdTimer: Timer?
 
   private var central: CBCentralManager!
   private var peripherals: [UUID: CBPeripheral] = [:]
@@ -112,7 +120,7 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
 
   /// Pull-to-refresh: listen for advertisements, then read every desk heard (pinned and nearby, not hidden).
   func refresh() async {
-    guard central.state == .poweredOn, !scanning, readTotal == 0 else { return }
+    guard central.state == .poweredOn, !scanning, readTotal == 0, controlling == nil else { return }
     scanning = true
     seenIDs = []; seen = 0; seenDesks = 0
     scanStarted = Date()
@@ -180,6 +188,65 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
     }
   }
 
+  // MARK: Height control
+
+  func startControl(_ id: UUID) {
+    guard busy == nil, let p = peripherals[id] ?? central.retrievePeripherals(withIdentifiers: [id]).first else { return }
+    peripherals[id] = p
+    controlling = id; controlReady = false; controlTx = nil
+    busy = id
+    token = UUID()
+    buffer = Data(); rawTenths = nil; unit = nil
+    desks[id]?.problem = nil
+    failed = nil
+    p.delegate = self
+    central.connect(p)
+    later(12) {
+      if !self.controlReady {
+        self.fail(p, "Couldn't open the controls: the desk didn't answer. Another phone or app may be connected to it (for example DeskBar on a Mac).")
+      }
+    }
+  }
+
+  /// Stops the desk, then disconnects so other apps and phones can reach it again.
+  func endControl() {
+    guard let id = controlling, let p = peripherals[id] else { return }
+    stopMoving()
+    later(0.3) { self.finish(p, "") }  // let the stop frame go out before the connection closes
+  }
+
+  /// Press-and-hold: wake the controller, then repeat the move frame every 0.1 s like a held keypad button.
+  func hold(up: Bool) {
+    guard controlReady else { return }
+    holdTimer?.invalidate()
+    send(0xFE)
+    let op: UInt8 = up ? 0x01 : 0x02
+    let started = Date()
+    holdTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+      // Safety net: if a release is ever missed, stop after 30 s instead of driving the desk to its limit.
+      if Date().timeIntervalSince(started) > 30 { self?.stopMoving() } else { self?.send(op) }
+    }
+  }
+
+  func stopMoving() {
+    holdTimer?.invalidate()
+    holdTimer = nil
+    send(0x2B)
+  }
+
+  /// Drives the desk to an absolute height (the controller stops by itself on arrival).
+  func goTo(mm: Int) {
+    guard controlReady, (500...1400).contains(mm) else { return }
+    holdTimer?.invalidate()
+    send(0xFE)
+    later(0.3) { self.send(0x1B, [UInt8(mm >> 8), UInt8(mm & 0xFF)]) }
+  }
+
+  private func send(_ op: UInt8, _ data: [UInt8] = []) {
+    guard let id = controlling, let p = peripherals[id], let tx = controlTx else { return }
+    p.writeValue(jiecangFrame(op, data), for: tx, type: controlType)
+  }
+
   private func fail(_ p: CBPeripheral, _ problem: String, status: String = "Couldn't read") {
     guard busy == p.identifier else { return }
     desks[p.identifier]?.problem = problem
@@ -190,6 +257,10 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
   private func finish(_ p: CBPeripheral, _ status: String) {
     guard busy == p.identifier else { return }
     probing.remove(p.identifier)
+    if controlling == p.identifier {
+      holdTimer?.invalidate(); holdTimer = nil
+      controlling = nil; controlReady = false; controlTx = nil
+    }
     desks[p.identifier]?.status = status
     if readTotal > 0 { readDone += 1 }
     busy = nil
@@ -281,6 +352,7 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
       // Family is set only once an F2 F2 reply parses: PairLink desks share FF12/FF01/FF02 but speak another protocol.
       p.setNotifyValue(true, for: rx)
       let type: CBCharacteristicWriteType = tx.properties.contains(.write) ? .withResponse : .withoutResponse
+      if controlling == p.identifier { controlTx = tx; controlType = type; controlReady = true }
       // wake (FE60 uses 0xFE, FF* modules 0x00), then status query 0x07 and unit query 0x0E; none move the desk
       let wake: UInt8 = s.uuid == CBUUID(string: "FE60") ? 0xFE : 0x00
       for (i, op) in [wake, 0x07, 0x0E].enumerated() {
@@ -335,6 +407,7 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
     desks[p.identifier]?.cm = inches ? Double(raw) / 10 * 2.54 : Double(raw) / 10
     desks[p.identifier]?.shownUnit = inches ? "in" : "cm"
     desks[p.identifier]?.readAt = Date()
+    if controlling == p.identifier { return }  // controls stay connected; heights keep streaming in while the desk moves
     if unit != nil { finish(p, "") } else if !hadHeight {
       later(1) { self.finish(p, "") }  // unit reply may not come
     }
