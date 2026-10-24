@@ -4,14 +4,16 @@ name: release-please
 on:
   push:
     branches: [main]
-permissions:
-  contents: write
-  pull-requests: write
+permissions: {}
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    permissions:  # only this job writes: tags/releases and the release PR
+      contents: write
+      pull-requests: write
     steps:
-      - uses: googleapis/release-please-action@v4
+      # Pinned to a commit: a tag can be moved, and this job holds write access.
+      - uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
