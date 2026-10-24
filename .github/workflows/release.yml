@@ -28,6 +28,7 @@ jobs:
         run: |
           last=$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || echo v0.1.0)
           range=$(git rev-parse -q --verify "refs/tags/$last" >/dev/null && echo "$last..HEAD" || echo HEAD)
+          if [ "$(git rev-list --count "$range")" = 0 ]; then echo "Nothing new since $last"; exit 0; fi
           log=$(git log --format='%s%n%b' "$range")
           IFS=. read -r major minor patch <<< "${last#v}"
           if printf '%s' "$log" | grep -qE '^[a-z]+(\(.+\))?!:|BREAKING CHANGE'; then
