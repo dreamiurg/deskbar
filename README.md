@@ -39,7 +39,8 @@ make check
 
 `make check` runs swift-format, SwiftLint, the complexity limits, the logic tests and a typecheck of both apps.
 CI runs the parts that work on Linux; builds stay local because macOS runners are expensive.
-Versions come from `version.txt` (bumped by release-please) plus the commit count and hash, stamped in at build time.
+Every merge to `main` is released automatically: breaking change → major, `feat:` → minor, anything else → patch
+(`.github/workflows/release.yml`). Builds stamp in the latest tag, the commit count and the commit hash.
 
 ## License
 

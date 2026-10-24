@@ -1,0 +1,42 @@
+# Every merge to main is a release. The bump comes from the commits since the last tag (conventional commits):
+# a breaking change ("!:" or "BREAKING CHANGE") → major, any feat → minor, anything else → patch.
+# Tags vX.Y.Z and publishes a GitHub release with notes generated from the merged PRs. No release PR to approve.
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          fetch-depth: 0
+      - name: Tag and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          last=$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || echo v0.1.0)
+          range=$(git rev-parse -q --verify "refs/tags/$last" >/dev/null && echo "$last..HEAD" || echo HEAD)
+          log=$(git log --format='%s%n%b' "$range")
+          IFS=. read -r major minor patch <<< "${last#v}"
+          if printf '%s' "$log" | grep -qE '^[a-z]+(\(.+\))?!:|BREAKING CHANGE'; then
+            major=$((major + 1)); minor=0; patch=0
+          elif printf '%s' "$log" | grep -qE '^feat(\(.+\))?:'; then
+            minor=$((minor + 1)); patch=0
+          else
+            patch=$((patch + 1))
+          fi
+          next="v$major.$minor.$patch"
+          echo "Releasing $next (previous $last)"
+          gh release create "$next" --target "$GITHUB_SHA" --title "$next" --generate-notes
