@@ -76,7 +76,9 @@ final class App: NSObject, NSApplicationDelegate, CBCentralManagerDelegate, CBPe
 
   @objc func save(_ sender: NSMenuItem) {
     guard let t = tenths else { return }
-    presets[sender.representedObject as! String] = Int((Double(t) * 2.54).rounded())
+    let mm = Int((Double(t) * 2.54).rounded())
+    guard (500...1400).contains(mm) else { return }  // garbage frame; also keeps mm >> 8 within UInt8
+    presets[sender.representedObject as! String] = mm
   }
 
   @objc func toggleLogin() {
@@ -91,7 +93,10 @@ final class App: NSObject, NSApplicationDelegate, CBCentralManagerDelegate, CBPe
   }
 
   func centralManager(_ c: CBCentralManager, didDiscover p: CBPeripheral, advertisementData: [String: Any], rssi: NSNumber) {
-    // ponytail: takes the first FE60 device in range; pin by identifier if a second one ever shows up
+    // Pin to the first desk ever connected so a neighbor's FE60 device is never picked up.
+    let pinned = UserDefaults.standard.string(forKey: "desk")
+    guard pinned == nil || pinned == p.identifier.uuidString else { return }
+    UserDefaults.standard.set(p.identifier.uuidString, forKey: "desk")
     c.stopScan()
     desk = p
     p.delegate = self

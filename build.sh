@@ -7,5 +7,6 @@ pkill -x DeskBar || true
 mkdir -p "$APP/Contents/MacOS"
 cp Info.plist "$APP/Contents/"
 swiftc -O main.swift -o "$APP/Contents/MacOS/DeskBar"
-codesign -s - --force "$APP"
+# Stable identity: an ad-hoc signature changes every build and macOS then drops the Bluetooth permission.
+codesign -s "Apple Development" --force "$APP"
 open "$APP"

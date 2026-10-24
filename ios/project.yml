@@ -1,0 +1,21 @@
+name: DeskBar
+options:
+  bundleIdPrefix: net.dreamiurg
+  deploymentTarget:
+    iOS: "17.0"
+targets:
+  DeskBar:
+    type: application
+    platform: iOS
+    sources: [DeskBar]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: net.dreamiurg.deskbar.ios
+        DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM}
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription: DeskBar reads the height of nearby standing desks.
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_CFBundleDisplayName: DeskBar
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_VERSION: "5.0"
