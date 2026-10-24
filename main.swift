@@ -20,7 +20,7 @@ final class App: NSObject, NSApplicationDelegate, CBCentralManagerDelegate, CBPe
   var central: CBCentralManager!
   var desk: CBPeripheral?
   var tx: CBCharacteristic?
-  var tenths: Int?  // current height, tenths of an inch
+  var tenths: Int?  // current height, tenths of an inch (converted when the keypad shows cm)
 
   // Presets in mm. Defaults are the heights seen on first setup (49.0" / 31.8").
   var presets: [String: Int] {
@@ -49,6 +49,7 @@ final class App: NSObject, NSApplicationDelegate, CBCentralManagerDelegate, CBPe
     menu.addItem(.separator())
     for name in ["Stand", "Sit"] { add("Save Current Height as \(name)", #selector(save(_:)), name, tenths != nil) }
     menu.addItem(.separator())
+    menu.addItem(withTitle: "Forget Desk", action: #selector(forget), keyEquivalent: "")
     let login = NSMenuItem(title: "Open at Login", action: #selector(toggleLogin), keyEquivalent: "")
     login.state = SMAppService.mainApp.status == .enabled ? .on : .off
     menu.addItem(login)
@@ -73,6 +74,14 @@ final class App: NSObject, NSApplicationDelegate, CBCentralManagerDelegate, CBPe
   @objc func save(_ sender: NSMenuItem) {
     guard let t = tenths else { return }
     presets[sender.representedObject as! String] = Int((Double(t) * 2.54).rounded())
+  }
+
+  // Unpins the desk and connects to the next FE60 desk found (e.g. after replacing the controller).
+  @objc func forget() {
+    UserDefaults.standard.removeObject(forKey: "desk")
+    if let p = desk { desk = nil; tx = nil; tenths = nil; central.cancelPeripheralConnection(p) }
+    item.button?.title = "Desk …"
+    central.scanForPeripherals(withServices: [service])
   }
 
   @objc func toggleLogin() {
@@ -100,7 +109,9 @@ final class App: NSObject, NSApplicationDelegate, CBCentralManagerDelegate, CBPe
   func centralManager(_ c: CBCentralManager, didConnect p: CBPeripheral) { p.discoverServices([service]) }
 
   func centralManager(_ c: CBCentralManager, didDisconnectPeripheral p: CBPeripheral, error: Error?) {
+    guard p == desk else { return }  // a forgotten desk: don't reconnect
     tx = nil
+    tenths = nil  // stale once disconnected; keeps Save from storing it
     item.button?.title = "Desk …"
     c.connect(p)  // pending connect: completes whenever the desk is back in range
   }
@@ -121,10 +132,12 @@ final class App: NSObject, NSApplicationDelegate, CBCentralManagerDelegate, CBPe
 
   func peripheral(_ p: CBPeripheral, didUpdateValueFor ch: CBCharacteristic, error: Error?) {
     guard let v = ch.value.map(Array.init), v.count >= 9, v[0] == 0xF2, v[1] == 0xF2, v[2] == 0x01, v[3] == 0x03 else { return }
-    let t = Int(v[4]) << 8 | Int(v[5])
+    // Tenths of the keypad's display unit: 24–51″ reads as 240–510, 60–130 cm as 600–1300.
+    let raw = Int(v[4]) << 8 | Int(v[5])
+    let t = raw < 550 ? raw : Int((Double(raw) / 2.54).rounded())
     guard (200...600).contains(t) else { return }  // 20–60″: drop garbage frames; also keeps saved mm >> 8 within UInt8
     tenths = t
-    item.button?.title = String(format: "↕ %.1f″", Double(t) / 10)
+    item.button?.title = raw < 550 ? String(format: "↕ %.1f″", Double(raw) / 10) : String(format: "↕ %.1f cm", Double(raw) / 10)
   }
 }
 

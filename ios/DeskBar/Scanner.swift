@@ -24,8 +24,10 @@ struct Desk: Identifiable {
   // iOS hides MAC addresses; Jiecang modules end their name with the MAC tail ("BLE Device 9A1C27"),
   // otherwise fall back to the end of the iOS-assigned identifier.
   var short: String {
-    let tail = String(name.reversed().prefix { $0.isHexDigit }.reversed())
-    return tail.count >= 4 ? String(tail.suffix(4)).uppercased() : String(id.uuidString.suffix(4))
+    // Last word must be hex with a digit, so "Coffee" or "Desk Cafe" don't pass as MAC tails.
+    let tail = name.split(whereSeparator: { " -_".contains($0) }).last.map(String.init) ?? ""
+    let mac = tail.count >= 4 && tail.allSatisfy(\.isHexDigit) && tail.contains(where: \.isNumber)
+    return mac ? String(tail.suffix(4)).uppercased() : String(id.uuidString.suffix(4))
   }
 
   var height: String {
@@ -59,11 +61,13 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
     didSet { UserDefaults.standard.set(Array(archived), forKey: "archived") }
   }
   @Published var busy: UUID?
+  @Published var bluetoothProblem: String?  // nil while Bluetooth is on and allowed
 
   private var central: CBCentralManager!
   private var peripherals: [UUID: CBPeripheral] = [:]
   private var queue: [UUID] = []
   private var rssiShownAt: [UUID: Date] = [:]
+  private var probing: Set<UUID> = []  // sent Jiecang queries this read; waiting for a reply
   private var token = UUID()  // identifies the current read; delayed work from an older read is ignored
   private var buffer = Data()
   private var rawTenths: Int?
@@ -82,7 +86,10 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
   }
 
   private func next() {
-    guard busy == nil, !queue.isEmpty, let p = peripherals[queue.removeFirst()] else { return }
+    guard busy == nil else { return }
+    var found: CBPeripheral?
+    while found == nil, !queue.isEmpty { found = peripherals[queue.removeFirst()] }
+    guard let p = found else { return }
     busy = p.identifier
     token = UUID()
     buffer = Data(); rawTenths = nil; unit = nil
@@ -102,6 +109,7 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
 
   private func finish(_ p: CBPeripheral, _ status: String) {
     guard busy == p.identifier else { return }
+    probing.remove(p.identifier)
     desks[p.identifier]?.status = status
     busy = nil
     central.cancelPeripheralConnection(p)
@@ -111,8 +119,14 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
   // MARK: Central
 
   func centralManagerDidUpdateState(_ c: CBCentralManager) {
-    if c.state == .poweredOn {
+    switch c.state {
+    case .poweredOn:
+      bluetoothProblem = nil
       c.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
+    case .unauthorized: bluetoothProblem = "Bluetooth access is off for DeskBar. Turn it on in Settings › DeskBar."
+    case .poweredOff: bluetoothProblem = "Bluetooth is off."
+    case .unsupported: bluetoothProblem = "This device has no Bluetooth LE."
+    default: bluetoothProblem = nil  // unknown/resetting: transient
     }
   }
 
@@ -121,9 +135,9 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
     let services = (a[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID]) ?? []
     let candidate = services.contains(linakAdv) || services.contains(where: jiecangServices.contains)
       || deskNames.contains { name?.lowercased().contains($0) == true }
-    peripherals[p.identifier] = p
     guard var d = desks[p.identifier] else {
-      guard name != nil || candidate else { return }  // skip anonymous beacons
+      guard name != nil || candidate else { return }  // skip anonymous beacons (and don't retain them)
+      peripherals[p.identifier] = p
       desks[p.identifier] = Desk(id: p.identifier, name: name ?? "Unnamed", rssi: rssi.intValue, candidate: candidate)
       return
     }
@@ -164,7 +178,7 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
     }
     if let tx = chars.first(where: { jiecangWrite.contains($0.uuid) }),
        let rx = chars.first(where: { jiecangNotify.contains($0.uuid) }) {
-      desks[p.identifier]?.family = .jiecang
+      // Family is set only once an F2 F2 reply parses: PairLink desks share FF12/FF01/FF02 but speak another protocol.
       p.setNotifyValue(true, for: rx)
       let type: CBCharacteristicWriteType = tx.properties.contains(.write) ? .withResponse : .withoutResponse
       // wake (FE60 uses 0xFE, FF* modules 0x00), then status query 0x07 and unit query 0x0E; none move the desk
@@ -172,11 +186,12 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
       for (i, op) in [wake, 0x07, 0x0E].enumerated() {
         later(0.3 * Double(i + 1)) { p.writeValue(jiecangFrame(op), for: tx, type: type) }
       }
+      probing.insert(p.identifier)
       return
     }
     // Unknown device: once every service is explored, report what it exposes so it can be identified later.
     let all = p.services ?? []
-    if all.allSatisfy({ $0.characteristics != nil }), desks[p.identifier]?.family == .unknown {
+    if all.allSatisfy({ $0.characteristics != nil }), desks[p.identifier]?.family == .unknown, !probing.contains(p.identifier) {
       finish(p, "Unsupported: " + all.map(\.uuid.uuidString).joined(separator: ", "))
     }
   }
@@ -202,10 +217,16 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
     while let start = buffer.firstRange(of: Data([0xF2, 0xF2]))?.lowerBound {
       buffer = buffer[start...]
       let b = [UInt8](buffer)
-      guard b.count >= 4, b.count >= 6 + Int(b[3]) else { return }  // wait for more bytes
-      let len = Int(b[3]), payload = Array(b[4..<4 + len])
+      guard b.count >= 4 else { return }  // wait for more bytes
+      let len = Int(b[3])
+      // Real replies are short; a huge length means this F2 F2 was payload, not a header: resync past it.
+      if len > 32 { buffer = Data(b.dropFirst(2)); continue }
+      guard b.count >= 6 + len else { return }
+      let payload = Array(b[4..<4 + len])
+      let sum = UInt8((Int(b[2]) + len + payload.reduce(0) { $0 + Int($1) }) & 0xFF)
+      guard b[4 + len] == sum, b[5 + len] == 0x7E else { buffer = Data(b.dropFirst(2)); continue }
       buffer = Data(b[(6 + len)...])
-      guard b[5 + len] == 0x7E else { continue }
+      desks[p.identifier]?.family = .jiecang
       if b[2] == 0x01, len >= 2 { rawTenths = Int(payload[0]) << 8 | Int(payload[1]) }
       if b[2] == 0x0E, len >= 1 { unit = payload[0] }
     }

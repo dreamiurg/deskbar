@@ -32,7 +32,13 @@ struct ContentView: View {
         }
         Section { } footer: { Text("Swipe right to pin, left to archive. Touch and hold to rename.") }
       }
-      .overlay { if visible.isEmpty { ContentUnavailableView("Scanning…", systemImage: "antenna.radiowaves.left.and.right") } }
+      .overlay {
+        if let problem = scanner.bluetoothProblem {
+          ContentUnavailableView("Bluetooth unavailable", systemImage: "exclamationmark.triangle", description: Text(problem))
+        } else if visible.isEmpty {
+          ContentUnavailableView("Scanning…", systemImage: "antenna.radiowaves.left.and.right")
+        }
+      }
       .navigationTitle("Desks")
       .toolbar {
         ToolbarItem(placement: .topBarLeading) {
