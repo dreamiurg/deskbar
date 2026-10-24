@@ -150,6 +150,13 @@ struct ContentView: View {
       }
       .buttonStyle(.plain)
       .accessibilityHint(open ? "Collapses details" : "Shows details")
+      // Only the header: a long press anywhere in the card would steal the hold on Raise/Lower/presets.
+      .contextMenu {
+        if d.isDesk { Button("Read Now", systemImage: "arrow.clockwise") { scanner.read([d.id]) } }
+        Button("Rename…", systemImage: "pencil", action: rename)
+        pinButton
+        hideButton
+      }
 
       if open {
         if let problem = d.problem {
@@ -209,14 +216,9 @@ struct ContentView: View {
       }
     }
     .padding(.vertical, 4)
-    .swipeActions(edge: .leading) { pinButton.tint(.orange) }
-    .swipeActions(edge: .trailing) { hideButton.tint(.gray) }
-    .contextMenu {
-      if d.isDesk { Button("Read Now", systemImage: "arrow.clockwise") { scanner.read([d.id]) } }
-      Button("Rename…", systemImage: "pencil", action: rename)
-      pinButton
-      hideButton
-    }
+    // No swipes while the desk is under control: a sideways drag on Raise/Lower must not turn into a swipe.
+    .swipeActions(edge: .leading) { if scanner.controlling != d.id { pinButton.tint(.orange) } }
+    .swipeActions(edge: .trailing) { if scanner.controlling != d.id { hideButton.tint(.gray) } }
   }
 
   // Live height plus hold-to-move, Stop and presets, shown while the desk is connected for control.
