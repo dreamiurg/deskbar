@@ -19,12 +19,32 @@ struct ContentView: View {
   @Environment(\.scenePhase) var scenePhase
   @State var renaming: Desk?
   @State var nameText = ""
+  @AppStorage("sort") var sort = SortOrder.distance
 
-  // Stable order: by label, never by signal (which changes every second and made rows jump).
+  enum SortOrder: String, CaseIterable {
+    case distance = "Distance", name = "Name", type = "Type"
+  }
+
   func list(_ include: (Desk) -> Bool) -> [Desk] {
-    scanner.desks.values
-      .filter { include($0) && matches($0) }
-      .sorted { scanner.label($0).localizedStandardCompare(scanner.label($1)) == .orderedAscending }
+    sorted(scanner.desks.values.filter { include($0) && matches($0) })
+  }
+
+  // Distance is smoothed and rounded (5 ft steps past 10 ft), so close desks keep a steady order; name breaks ties.
+  // Devices not heard recently only have an old signal reading, so by "distance" they're ordered by when last heard.
+  func sorted(_ items: [Desk]) -> [Desk] {
+    items.sorted { a, b in
+      let byName = scanner.label(a).localizedStandardCompare(scanner.label(b)) == .orderedAscending
+      switch sort {
+      case .name: return byName
+      case .type:
+        let ta = a.isDesk ? a.family.rawValue : a.type.rawValue, tb = b.isDesk ? b.family.rawValue : b.type.rawValue
+        return ta == tb ? byName : ta < tb
+      case .distance:
+        let ra = scanner.isInRange(a), rb = scanner.isInRange(b)
+        if !ra && !rb { return (a.lastHeard ?? .distantPast) > (b.lastHeard ?? .distantPast) }
+        return a.feet == b.feet ? byName : a.feet < b.feet
+      }
+    }
   }
   func matches(_ d: Desk) -> Bool {
     search.isEmpty || [title(d), masked(d) ? "" : d.name, d.short].contains { $0.localizedCaseInsensitiveContains(search) }
@@ -34,6 +54,8 @@ struct ContentView: View {
 
   var pinned: [Desk] { list { $0.isDesk && isPinned($0) } }
   var desks: [Desk] { list { $0.isDesk && !isPinned($0) && !isHidden($0) } }
+  var inRange: [Desk] { desks.filter(scanner.isInRange) }
+  var seenEarlier: [Desk] { desks.filter { !scanner.isInRange($0) } }
   var others: [Desk] { showAll ? list { !$0.isDesk && !isHidden($0) } : [] }
   var hiddenDesks: [Desk] { list { isHidden($0) && !isPinned($0) } }
 
@@ -42,8 +64,17 @@ struct ContentView: View {
       List {
         Section { StatusCard(scanner: scanner, deskCount: pinned.count + desks.count) }
         if !pinned.isEmpty { Section("Pinned") { ForEach(pinned, content: card) } }
-        if !desks.isEmpty { Section("Desks · A–Z") { ForEach(desks, content: card) } }
-        if !others.isEmpty { Section("Other devices · A–Z") { ForEach(others, content: card) } }
+        if !inRange.isEmpty { Section("In range · by \(sort.rawValue.lowercased())") { ForEach(inRange, content: card) } }
+        if !seenEarlier.isEmpty {
+          Section {
+            ForEach(seenEarlier, content: card)
+          } header: {
+            Text("Seen earlier")
+          } footer: {
+            Text("Not heard in the last scan. Removed after \(Scanner.forgetAfterDays) days unless pinned or renamed.")
+          }
+        }
+        if !others.isEmpty { Section("Other devices · by \(sort.rawValue.lowercased())") { ForEach(others, content: card) } }
         if !hiddenDesks.isEmpty {
           // Out of the way at the bottom, collapsed until opened.
           Section {
@@ -96,6 +127,16 @@ struct ContentView: View {
             .accessibilityLabel("Show all Bluetooth devices")
         }
         ToolbarItem(placement: .topBarTrailing) {
+          Menu {
+            Picker("Sort by", selection: $sort) {
+              ForEach(SortOrder.allCases, id: \.self) { Text($0.rawValue) }
+            }
+          } label: {
+            Image(systemName: "arrow.up.arrow.down")
+          }
+          .accessibilityLabel("Sort")
+        }
+        ToolbarItem(placement: .topBarTrailing) {
           ShareLink(item: csv(), preview: SharePreview("desks.csv")).accessibilityLabel("Export CSV")
         }
       }
@@ -137,7 +178,7 @@ struct ContentView: View {
   func isStale(_ d: Desk) -> Bool { scanner.scanStarted.map { (d.lastHeard ?? .distantPast) < $0 } ?? false }
 
   func togglePin(_ d: Desk) { scanner.pinned.formSymmetricDifference([d.id.uuidString]) }
-  func toggleHide(_ d: Desk) { withAnimation { _ = scanner.hidden.formSymmetricDifference([d.id.uuidString]) } }
+  func toggleHide(_ d: Desk) { withAnimation { scanner.hidden.formSymmetricDifference([d.id.uuidString]) } }
   func rename(_ d: Desk) {
     nameText = scanner.labels[d.id.uuidString] ?? ""
     renaming = d

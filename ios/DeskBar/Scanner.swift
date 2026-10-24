@@ -166,6 +166,7 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
           var d = $0; d.status = ""; d.problem = nil; return (d.id, d)
         })
     }
+    forgetStale()
     if knownIDs.isEmpty { knownIDs = Set(desks.keys.map(\.uuidString)) }  // desks found before Watch existed aren't "new"
     if let until = watchUntil, until < Date() { watching = false }
     activity = Activity<WatchAttributes>.activities.first
@@ -212,7 +213,26 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
     save()
   }
 
+  /// Heard in the last pull-down scan or in the last 10 minutes (Watch mode).
+  func isInRange(_ d: Desk) -> Bool {
+    let heard = d.lastHeard ?? .distantPast
+    return heard >= (scanStarted ?? .distantFuture) || heard > Date().addingTimeInterval(-600)
+  }
+
+  static let forgetAfterDays = 7
+
+  /// Drops desks not heard for a week, except pinned or renamed ones (those are deliberate inventory).
+  /// They stay "known", so one that comes back isn't announced as new.
+  private func forgetStale() {
+    let cutoff = Date().addingTimeInterval(-Double(Self.forgetAfterDays) * 86400)
+    for (id, d) in desks where (d.lastHeard ?? d.readAt ?? .distantPast) < cutoff {
+      let key = id.uuidString
+      if !pinned.contains(key) && labels[key] == nil { desks[id] = nil }
+    }
+  }
+
   private func save() {
+    forgetStale()
     let keep = desks.values.filter(\.isDesk)  // not every phone and earbud nearby
     UserDefaults.standard.set(try? JSONEncoder().encode(Array(keep)), forKey: "desks")
     // Desks found by a pull-down count as seen, so Watch won't later announce them as new.
