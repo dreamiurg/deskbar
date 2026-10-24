@@ -46,7 +46,24 @@ repos:
         language: system
         pass_filenames: false
         stages: [pre-commit]
+      - id: privacy
+        name: privacy (emails, MAC addresses)
+        entry: scripts/check-privacy.sh
+        language: system
+        types: [text]
+      - id: privacy-git-email
+        name: privacy (git user.email is noreply)
+        entry: scripts/check-privacy.sh --git-email
+        language: system
+        pass_filenames: false
+        always_run: true
       # Push stage: the slower checks that CI can't run cheaply (it has no macOS runner)
+      - id: privacy-repo
+        name: privacy (whole repo)
+        entry: scripts/check-privacy.sh
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
       - id: logic-tests
         name: logic tests
         entry: make test

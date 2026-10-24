@@ -37,6 +37,12 @@ jobs:
           fetch-depth: 0  # gitleaks scans history
       - name: SwiftLint
         run: docker run --rm -v "$PWD:/repo" -w /repo ghcr.io/realm/swiftlint:0.63.2 swiftlint lint --strict --quiet
+      - name: Privacy (emails, MAC addresses, commit authors)
+        env:
+          RANGE: ${{ github.event.pull_request.base.sha && format('{0}..{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || 'HEAD~1..HEAD' }}
+        run: |
+          scripts/check-privacy.sh
+          scripts/check-privacy.sh --authors "$RANGE"
       - name: gitleaks
         run: docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.30.1 git /repo --redact
       - name: Semgrep and lizard
