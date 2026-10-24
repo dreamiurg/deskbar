@@ -23,8 +23,9 @@ struct ContentView: View {
   var body: some View {
     NavigationStack {
       List {
+        Section { } header: { Text(status).textCase(nil) }
         if !pinned.isEmpty { Section("Pinned") { ForEach(pinned, content: row) } }
-        Section("Nearby") { ForEach(nearby, content: row) }
+        if !nearby.isEmpty { Section("Nearby") { ForEach(nearby, content: row) } }
         if !archived.isEmpty {
           NavigationLink { List { ForEach(archived, content: row) }.navigationTitle("Archived") } label: {
             LabeledContent("Archived", value: "\(archived.count)")
@@ -35,10 +36,12 @@ struct ContentView: View {
       .overlay {
         if let problem = scanner.bluetoothProblem {
           ContentUnavailableView("Bluetooth unavailable", systemImage: "exclamationmark.triangle", description: Text(problem))
-        } else if visible.isEmpty {
-          ContentUnavailableView("Scanning…", systemImage: "antenna.radiowaves.left.and.right")
+        } else if visible.isEmpty && !scanner.scanning && scanner.readTotal == 0 {
+          ContentUnavailableView("No desks yet", systemImage: "arrow.down",
+                                 description: Text("Pull down to scan for nearby desks."))
         }
       }
+      .refreshable { await scanner.refresh() }
       .navigationTitle("Desks")
       .toolbar {
         ToolbarItem(placement: .topBarLeading) {
@@ -46,7 +49,6 @@ struct ContentView: View {
             .accessibilityLabel("Show all Bluetooth devices")
         }
         ToolbarItemGroup(placement: .topBarTrailing) {
-          Button("Read All") { scanner.read((pinned + nearby).map(\.id)) }
           ShareLink(item: csv(), preview: SharePreview("desks.csv")).accessibilityLabel("Export CSV")
         }
       }
@@ -58,6 +60,16 @@ struct ContentView: View {
         if let d = renaming { Text("\(d.family.rawValue) · \(d.short)") }
       }
     }
+  }
+
+  var status: String {
+    if scanner.scanning {
+      let found = scanner.seenDesks
+      return "Scanning… \(scanner.secondsLeft)s · heard \(scanner.seen) Bluetooth devices · \(found) desk\(found == 1 ? "" : "s")"
+    }
+    if scanner.readTotal > 0 { return "Reading desk \(min(scanner.readDone + 1, scanner.readTotal)) of \(scanner.readTotal)…" }
+    if let t = scanner.lastRefresh { return "Updated \(t.formatted(date: .omitted, time: .shortened)) · pull down to refresh" }
+    return "Pull down to scan"
   }
 
   func row(_ d: Desk) -> some View {

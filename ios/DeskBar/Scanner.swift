@@ -8,9 +8,9 @@
 import CoreBluetooth
 import Foundation
 
-enum Family: String { case jiecang = "Jiecang", linak = "Linak", unknown = "Unknown" }
+enum Family: String, Codable { case jiecang = "Jiecang", linak = "Linak", unknown = "Unknown" }
 
-struct Desk: Identifiable {
+struct Desk: Identifiable, Codable {
   let id: UUID
   var name: String
   var rssi: Int
@@ -62,11 +62,20 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
   }
   @Published var busy: UUID?
   @Published var bluetoothProblem: String?  // nil while Bluetooth is on and allowed
+  // Pull-to-refresh progress
+  @Published var scanning = false
+  @Published var secondsLeft = 0
+  @Published var seen = 0  // distinct Bluetooth devices heard this scan
+  @Published var seenDesks = 0  // of those, desk-like ones
+  @Published var readDone = 0
+  @Published var readTotal = 0
+  @Published var lastRefresh = UserDefaults.standard.object(forKey: "lastRefresh") as? Date
 
   private var central: CBCentralManager!
   private var peripherals: [UUID: CBPeripheral] = [:]
   private var queue: [UUID] = []
   private var rssiShownAt: [UUID: Date] = [:]
+  private var seenIDs: Set<UUID> = []
   private var probing: Set<UUID> = []  // sent Jiecang queries this read; waiting for a reply
   private var token = UUID()  // identifies the current read; delayed work from an older read is ignored
   private var buffer = Data()
@@ -75,7 +84,40 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
 
   override init() {
     super.init()
+    // Desks found on earlier scans, so the list isn't empty before the first pull-to-refresh.
+    if let data = UserDefaults.standard.data(forKey: "desks"), let saved = try? JSONDecoder().decode([Desk].self, from: data) {
+      desks = Dictionary(uniqueKeysWithValues: saved.map { ($0.id, $0) })
+    }
     central = CBCentralManager(delegate: self, queue: .main)
+  }
+
+  /// Pull-to-refresh: listen for advertisements, then read every desk heard (pinned and nearby, not archived).
+  func refresh() async {
+    guard central.state == .poweredOn, !scanning, readTotal == 0 else { return }
+    scanning = true
+    seenIDs = []; seen = 0; seenDesks = 0
+    central.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
+    for s in stride(from: 6, to: 0, by: -1) {
+      secondsLeft = s
+      try? await Task.sleep(for: .seconds(1))
+    }
+    central.stopScan()
+    scanning = false
+    let ids = desks.values
+      .filter { seenIDs.contains($0.id) && ($0.candidate || $0.family != .unknown) && !archived.contains($0.id.uuidString) }
+      .map(\.id)
+    readDone = 0; readTotal = ids.count
+    read(ids)
+    while busy != nil || !queue.isEmpty { try? await Task.sleep(for: .milliseconds(200)) }
+    readTotal = 0
+    lastRefresh = Date()
+    UserDefaults.standard.set(lastRefresh, forKey: "lastRefresh")
+    save()
+  }
+
+  private func save() {
+    let keep = desks.values.filter { $0.candidate || $0.family != .unknown }  // not every phone and earbud nearby
+    UserDefaults.standard.set(try? JSONEncoder().encode(Array(keep)), forKey: "desks")
   }
 
   func label(_ d: Desk) -> String { labels[d.id.uuidString] ?? d.name }
@@ -88,7 +130,10 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
   private func next() {
     guard busy == nil else { return }
     var found: CBPeripheral?
-    while found == nil, !queue.isEmpty { found = peripherals[queue.removeFirst()] }
+    while found == nil, !queue.isEmpty {
+      let id = queue.removeFirst()
+      found = peripherals[id] ?? central.retrievePeripherals(withIdentifiers: [id]).first  // desk saved from an earlier launch
+    }
     guard let p = found else { return }
     busy = p.identifier
     token = UUID()
@@ -111,6 +156,7 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
     guard busy == p.identifier else { return }
     probing.remove(p.identifier)
     desks[p.identifier]?.status = status
+    if readTotal > 0 { readDone += 1 }
     busy = nil
     central.cancelPeripheralConnection(p)
     next()
@@ -120,9 +166,7 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
 
   func centralManagerDidUpdateState(_ c: CBCentralManager) {
     switch c.state {
-    case .poweredOn:
-      bluetoothProblem = nil
-      c.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
+    case .poweredOn: bluetoothProblem = nil  // idle until pull-to-refresh
     case .unauthorized: bluetoothProblem = "Bluetooth access is off for DeskBar. Turn it on in Settings › DeskBar."
     case .poweredOff: bluetoothProblem = "Bluetooth is off."
     case .unsupported: bluetoothProblem = "This device has no Bluetooth LE."
@@ -135,12 +179,17 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
     let services = (a[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID]) ?? []
     let candidate = services.contains(linakAdv) || services.contains(where: jiecangServices.contains)
       || deskNames.contains { name?.lowercased().contains($0) == true }
+    if seenIDs.insert(p.identifier).inserted {
+      seen = seenIDs.count
+      if candidate || desks[p.identifier].map({ $0.family != .unknown }) == true { seenDesks += 1 }
+    }
     guard var d = desks[p.identifier] else {
       guard name != nil || candidate else { return }  // skip anonymous beacons (and don't retain them)
       peripherals[p.identifier] = p
       desks[p.identifier] = Desk(id: p.identifier, name: name ?? "Unnamed", rssi: rssi.intValue, candidate: candidate)
       return
     }
+    peripherals[p.identifier] = p
     // Advertisements arrive many times a second; publish (and redraw) only real changes, RSSI at most every 2 s.
     let rssiDue = Date().timeIntervalSince(rssiShownAt[p.identifier] ?? .distantPast) > 2
     if rssiDue { d.rssi = rssi.intValue; rssiShownAt[p.identifier] = Date() }
