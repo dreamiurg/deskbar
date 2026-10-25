@@ -109,6 +109,16 @@ struct ContentView: View {
         if phase != .active { scanner.endControl() }  // never leave a desk connected or moving
         if phase == .active { scanner.rollDay() }
       }
+      // Controls live in a sheet, outside the list: inside a list row, iOS attaches long-press menus and swipes to the
+      // whole row, which steals a held Raise/Lower. Closing the sheet in any way stops the desk and disconnects.
+      .sheet(isPresented: Binding(get: { scanner.controlling != nil }, set: { if !$0 { scanner.endControl() } })) {
+        if let id = scanner.controlling, let d = scanner.desks[id] {
+          controls(d)
+            .padding(20)
+            .presentationDetents([.fraction(0.62), .large])
+            .presentationDragIndicator(.visible)
+        }
+      }
       .confirmationDialog(
         "Move this desk?", isPresented: Binding(get: { confirmControl != nil }, set: { if !$0 { confirmControl = nil } }),
         titleVisibility: .visible, presenting: confirmControl
@@ -272,11 +282,7 @@ struct ContentView: View {
       }
     }
     .font(.footnote)
-    if scanner.controlling == d.id {
-      controls(d)
-    } else {
-      primaryAction(d)
-    }
+    primaryAction(d)
     HStack(spacing: 8) {
       if d.family == .jiecang && scanner.controlling != d.id {
         ActionTile(title: "Control", icon: "arrow.up.and.down") {
@@ -314,9 +320,10 @@ struct ContentView: View {
   // Live height plus hold-to-move, Stop and presets, shown while the desk is connected for control.
   @ViewBuilder func controls(_ d: Desk) -> some View {
     let ready = scanner.controlReady
-    VStack(spacing: 10) {
+    VStack(spacing: 12) {
+      Text(scanner.label(d)).font(.headline).frame(maxWidth: .infinity, alignment: .leading)
       HStack(alignment: .firstTextBaseline) {
-        Text(d.cm == nil ? "–" : d.height).font(.system(size: 40, weight: .bold)).monospacedDigit()
+        Text(d.cm == nil ? "–" : d.height).font(.system(size: 44, weight: .bold)).monospacedDigit()
         if !ready { ProgressView().padding(.leading, 6); Text("Connecting…").font(.caption).foregroundStyle(.secondary) }
         Spacer()
         Button("Done") { scanner.endControl() }.buttonStyle(.bordered)
@@ -422,6 +429,8 @@ struct HoldButton: View {
       .frame(maxWidth: .infinity, minHeight: 64)
     }
     .buttonStyle(HoldStyle(onPress: onPress))
+    // If the button leaves the screen mid-press, iOS never reports the release: stop the desk anyway.
+    .onDisappear { onPress(false) }
     .accessibilityHint("Hold to move the desk")
   }
 }

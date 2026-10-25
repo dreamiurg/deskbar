@@ -629,8 +629,8 @@ extension Scanner {
     send(0xFE)
     let started = Date()
     holdTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
-      // Safety net: if a release is ever missed, stop after 30 s instead of driving the desk to its limit.
-      if Date().timeIntervalSince(started) > 30 { self?.stopMoving() } else { self?.send(op, data) }
+      // Safety net: if a release is ever missed, stop after 15 s instead of driving the desk to its limit.
+      if Date().timeIntervalSince(started) > 15 { self?.stopMoving() } else { self?.send(op, data) }
     }
   }
 
