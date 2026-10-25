@@ -62,6 +62,7 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
   static let deskServices = jiecangServices + [linakAdv]
   private var controlTx: CBCharacteristic?
   private var controlType: CBCharacteristicWriteType = .withResponse
+  private var controlWritesPending = 0  // acknowledged writes still in flight (CoreBluetooth queues them in order)
   private var holdTimer: Timer?
 
   private var central: CBCentralManager!
@@ -225,7 +226,7 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
     probing.remove(p.identifier)
     if controlling == p.identifier {
       holdTimer?.invalidate(); holdTimer = nil
-      controlling = nil; controlReady = false; controlTx = nil
+      controlling = nil; controlReady = false; controlTx = nil; controlWritesPending = 0
     }
     desks[p.identifier]?.status = status
     if readTotal > 0 { readDone += 1 }
@@ -385,6 +386,10 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
         p, "DeskBar can't read this device yet. It offers: " + all.map(\.uuid.uuidString).joined(separator: ", ") + ".",
         status: "Not supported")
     }
+  }
+
+  func peripheral(_ p: CBPeripheral, didWriteValueFor ch: CBCharacteristic, error: Error?) {
+    if controlling == p.identifier { controlWritesPending = max(0, controlWritesPending - 1) }
   }
 
   func peripheral(_ p: CBPeripheral, didUpdateValueFor ch: CBCharacteristic, error: Error?) {
@@ -630,7 +635,7 @@ extension Scanner {
     let started = Date()
     holdTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
       // Safety net: if a release is ever missed, stop after 15 s instead of driving the desk to its limit.
-      if Date().timeIntervalSince(started) > 15 { self?.stopMoving() } else { self?.send(op, data) }
+      if Date().timeIntervalSince(started) > 15 { self?.stopMoving() } else { self?.sendMove(op, data) }
     }
   }
 
@@ -642,6 +647,14 @@ extension Scanner {
 
   private func send(_ op: UInt8, _ data: [UInt8] = []) {
     guard let id = controlling, let p = peripherals[id], let tx = controlTx else { return }
+    if controlType == .withResponse { controlWritesPending += 1 }
     p.writeValue(jiecangFrame(op, data), for: tx, type: controlType)
+  }
+
+  /// Repeats of a held move skip a tick while the previous write is unacknowledged. Writes queue in order, so a
+  /// backlog of moves would delay the stop on release; this keeps at most one move ahead of it.
+  private func sendMove(_ op: UInt8, _ data: [UInt8]) {
+    guard controlWritesPending == 0 else { return }
+    send(op, data)
   }
 }
