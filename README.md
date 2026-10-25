@@ -37,8 +37,8 @@ pre-commit install && pre-commit install --hook-type pre-push
 make check
 ```
 
-Hooks also block personal data: email addresses (other than noreply/example ones), full MAC addresses, and commits
-made with a non-noreply git email (`scripts/check-privacy.sh`, also run in CI on every PR).
+Hooks also block personal data written into files: email addresses (other than noreply/example ones) and full MAC
+addresses (`scripts/check-privacy.sh`, also run in CI on every PR).
 
 `make check` runs swift-format, SwiftLint, the complexity limits, the logic tests and a typecheck of both apps.
 CI runs the parts that work on Linux; builds stay local because macOS runners are expensive.
