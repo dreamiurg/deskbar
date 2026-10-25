@@ -22,6 +22,8 @@
 	<string>1</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>DeskBar reads the height of nearby standing desks and watches for new ones.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>While you scan, DeskBar notes where each desk sounded closest so it can show desks on a map.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
 	<key>UIBackgroundModes</key>

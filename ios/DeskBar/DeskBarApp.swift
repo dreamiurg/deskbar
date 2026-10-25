@@ -127,6 +127,14 @@ struct ContentView: View {
             .accessibilityLabel("Show all Bluetooth devices")
         }
         ToolbarItem(placement: .topBarTrailing) {
+          NavigationLink {
+            DeskMap(scanner: scanner)
+          } label: {
+            Image(systemName: "map")
+          }
+          .accessibilityLabel("Map")
+        }
+        ToolbarItem(placement: .topBarTrailing) {
           Menu {
             Picker("Sort by", selection: $sort) {
               ForEach(SortOrder.allCases, id: \.self) { Text($0.rawValue) }
@@ -365,26 +373,37 @@ struct ContentView: View {
     let services = Array(Set(d.services ?? [])).sorted().map(BluetoothNumbers.describe)  // some devices repeat a UUID
     rows.append(("Services", services.isEmpty ? "none advertised" : services.joined(separator: ", ")))
     rows.append(("Last heard", ago(d.lastHeard)))
+    if d.isDesk {
+      rows.append(("Position", d.seenAt.map { "±\(Int($0.accuracy)) m, \(ago($0.at)) (on Map)" } ?? "not recorded yet"))
+    }
     rows.append(("ID", d.short))
     return rows
   }
 
   static let iso = ISO8601DateFormatter()
 
+  func csvRow(_ d: Desk) -> [String] {
+    let cm = d.cm ?? 0
+    let read = d.readAt.map(Self.iso.string) ?? ""
+    let lat = d.seenAt.map { String(format: "%.6f", $0.latitude) } ?? ""
+    let lon = d.seenAt.map { String(format: "%.6f", $0.longitude) } ?? ""
+    let accuracy = d.seenAt.map { String(Int($0.accuracy)) } ?? ""
+    let name = csvSafe(scanner.label(d))
+    let inches = String(format: "%.1f", cm / 2.54)
+    let centimetres = String(format: "%.1f", cm)
+    return [
+      name, csvSafe(d.name), d.family.rawValue, d.short, inches, centimetres, String(d.rssi), read, d.id.uuidString,
+      lat, lon, accuracy,
+    ]
+  }
+
   func csv() -> String {
-    let iso = Self.iso
     // The whole inventory, regardless of the search box.
     let all = scanner.desks.values.filter { $0.isDesk && !isHidden($0) && $0.cm != nil }
       .sorted { scanner.label($0).localizedStandardCompare(scanner.label($1)) == .orderedAscending }
-    let lines = all.map { d in
-      [
-        csvSafe(scanner.label(d)), csvSafe(d.name), d.family.rawValue, d.short, String(format: "%.1f", d.cm! / 2.54),
-        String(format: "%.1f", d.cm!),
-        "\(d.rssi)", d.readAt.map(iso.string) ?? "", d.id.uuidString,
-      ]
-      .map { "\"\($0.replacingOccurrences(of: "\"", with: "\"\""))\"" }.joined(separator: ",")
-    }
-    return (["label,name,manufacturer,short_id,height_in,height_cm,rssi,read_at,id"] + lines).joined(separator: "\n")
+    let lines = all.map { csvRow($0).map { "\"\($0.replacingOccurrences(of: "\"", with: "\"\""))\"" }.joined(separator: ",") }
+    return (["label,name,manufacturer,short_id,height_in,height_cm,rssi,read_at,id,latitude,longitude,accuracy_m"] + lines)
+      .joined(separator: "\n")
   }
 }
 
