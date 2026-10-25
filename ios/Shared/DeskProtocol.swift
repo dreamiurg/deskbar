@@ -63,6 +63,15 @@ func looksLikeDesk(name: String?, services: [String]) -> Bool {
   return services.contains(where: weakDeskServices.contains) && n.hasPrefix("ble device")
 }
 
+// MARK: Where a desk was found
+
+/// The phone's position when a desk sounded closest is the best estimate of where the desk is. A new fix replaces the
+/// saved one only when the desk is clearly louder (3 dB, past normal jitter) or the saved one is over a week old.
+func shouldReplaceLocation(savedRSSI: Int?, savedAt: Date?, newRSSI: Int, now: Date = Date()) -> Bool {
+  guard let savedRSSI, let savedAt else { return true }
+  return newRSSI >= savedRSSI + 3 || now.timeIntervalSince(savedAt) > 7 * 86400
+}
+
 // MARK: Distance
 
 /// Log-distance model with an indoor path-loss exponent of about 2.7. `oneMetre` is the expected signal at 1 m for this

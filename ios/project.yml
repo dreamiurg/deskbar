@@ -27,6 +27,7 @@ targets:
         CFBundleDisplayName: DeskBar
         UILaunchScreen: {}
         NSBluetoothAlwaysUsageDescription: DeskBar reads the height of nearby standing desks and watches for new ones.
+        NSLocationWhenInUseUsageDescription: While you scan, DeskBar notes where each desk sounded closest so it can show desks on a map.
         UIBackgroundModes: [bluetooth-central]  # Watch mode: desk-only scan keeps running with the app in the background
         NSSupportsLiveActivities: true
     settings:

@@ -44,6 +44,15 @@ check(!looksLikeDesk(name: "lime-413306575819", services: ["00FF", "00FF"]), "Li
 check(!looksLikeDesk(name: nil, services: ["FF12"]), "generic service alone is not a desk")
 check(looksLikeDesk(name: "Desky 1234", services: []), "desk name alone")
 
+// Map position: keep the fix from where the desk sounded closest.
+let now = Date()
+check(shouldReplaceLocation(savedRSSI: nil, savedAt: nil, newRSSI: -90, now: now), "first fix is always kept")
+check(!shouldReplaceLocation(savedRSSI: -70, savedAt: now, newRSSI: -68, now: now), "2 dB louder is jitter, keep old fix")
+check(shouldReplaceLocation(savedRSSI: -70, savedAt: now, newRSSI: -66, now: now), "4 dB louder: closer, replace")
+check(
+  shouldReplaceLocation(savedRSSI: -60, savedAt: now.addingTimeInterval(-8 * 86400), newRSSI: -80, now: now),
+  "week-old fix is refreshed")
+
 // Short IDs.
 check(shortID(name: "BLE Device 9A1C27", fallback: "X") == "1C27", "MAC tail from Jiecang name")
 check(shortID(name: "BLE Device-AE267F", fallback: "X") == "267F", "dash separator")

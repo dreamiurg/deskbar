@@ -7,82 +7,9 @@
 //  Linak / IKEA Idåsen: char 99FA0021, u16 LE in 0.1 mm above the desk's minimum height. Ref: newAM/idasen.
 import ActivityKit
 import CoreBluetooth
+import CoreLocation
 import Foundation
 import UserNotifications
-
-enum Family: String, Codable { case jiecang = "Jiecang", linak = "Linak", unknown = "Unknown" }
-
-struct Desk: Identifiable, Codable, Equatable {
-  let id: UUID
-  var name: String
-  var rssi: Int
-  var candidate: Bool  // advertises something desk-like
-  var family: Family = .unknown
-  var cm: Double?
-  var shownUnit = "cm"
-  var status = ""  // short chip text: "Reading…", "Couldn't read", "Not supported"
-  var problem: String?  // plain-language reason after a failed read
-  var readAt: Date?
-  var lastHeard: Date?
-  var services: [String]?  // advertised service UUIDs (optional so desks saved by older builds still decode)
-  var maker: String?  // from the advertisement's company ID, when known
-  var kind: Kind?  // optional so desks saved by older builds still decode
-  var txPower: Int?  // advertised transmit power, when the device includes it
-
-  var isDesk: Bool { candidate || family != .unknown }
-
-  var type: Kind { isDesk ? .desk : kind ?? .other }
-
-  // Log-distance model, indoor path-loss exponent ≈ 2.7, with a per-type signal at 1 m (or the device's own advertised
-  // transmit power minus the ~41 dB lost over the first metre). Roughly ±50%: tells near from far, not a tape measure.
-  var feet: Int { estimatedFeet(rssi: rssi, oneMetre: txPower.map { Double($0) - 41 } ?? type.oneMetre) }
-
-  var place: String { feet <= 5 ? "within a few feet" : feet <= 12 ? "nearby" : feet <= 25 ? "same room" : "far" }
-
-  var signal: String { "\(rssi) dBm · \(place) (~\(feet) ft)" }
-
-  // iOS hides MAC addresses; Jiecang modules end their name with the MAC tail ("BLE Device 9A1C27"),
-  // otherwise fall back to the end of the iOS-assigned identifier.
-  var short: String { shortID(name: name, fallback: id.uuidString) }
-
-  static func inches(_ mm: Int) -> String { String(format: "%.1f″", Double(mm) / 25.4) }
-
-  var height: String {
-    guard let cm else { return "–" }
-    return shownUnit == "in" ? String(format: "%.1f″", cm / 2.54) : String(format: "%.1f cm", cm)
-  }
-}
-
-/// What one advertisement says about a device.
-struct Advert {
-  let name: String?
-  let services: [String]
-  let candidate: Bool  // advertises something desk-like
-  let mfg: Data?
-  let txPower: Int?
-  let maker: String?
-
-  init(_ a: [String: Any], fallbackName: String?) {
-    name = (a[CBAdvertisementDataLocalNameKey] as? String) ?? fallbackName
-    let uuids = (a[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID]) ?? []
-    services = uuids.map(\.uuidString)
-    candidate = looksLikeDesk(name: name, services: services)
-    mfg = a[CBAdvertisementDataManufacturerDataKey] as? Data
-    txPower = (a[CBAdvertisementDataTxPowerLevelKey] as? NSNumber)?.intValue
-    maker = BluetoothNumbers.company(fromManufacturerData: mfg)
-  }
-}
-
-extension Desk {
-  /// Updates what an advertisement can tell us; called once per scan (or per report while watching).
-  mutating func refresh(from ad: Advert) {
-    lastHeard = Date()
-    if !ad.services.isEmpty { services = ad.services }
-    if let m = ad.maker { maker = m }
-    kind = Kind.guess(name: ad.name ?? name, mfg: ad.mfg, desk: isDesk || ad.candidate)
-    if let t = ad.txPower { txPower = t }
-  }
-}
 
 let linakAdv = CBUUID(string: "99FA0001-338A-1024-8A49-009C0215F78A")
 let linakHeight = CBUUID(string: "99FA0021-338A-1024-8A49-009C0215F78A")
@@ -90,7 +17,7 @@ let jiecangServices = ["FE60", "FF12", "FF00", "00FF"].map { CBUUID(string: $0) 
 let jiecangWrite = ["FE61", "FF01"].map { CBUUID(string: $0) }
 let jiecangNotify = ["FE62", "FF02"].map { CBUUID(string: $0) }
 
-final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeripheralDelegate {
+final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeripheralDelegate, CLLocationManagerDelegate {
   @Published var desks: [UUID: Desk] = [:]
   @Published var labels: [String: String] = UserDefaults.standard.dictionary(forKey: "labels") as? [String: String] ?? [:] {
     didSet { UserDefaults.standard.set(labels, forKey: "labels") }
@@ -143,6 +70,8 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
   private var rssiShownAt: [UUID: Date] = [:]
   private var rssiAvg: [UUID: Double] = [:]  // smoothed: single readings jump ±5–10 dBm
   private var seenIDs: Set<UUID> = []
+  private let locator = CLLocationManager()  // only runs during a pull-down scan, with the app open
+  private var lastFix: CLLocation?
   private var probing: Set<UUID> = []  // sent Jiecang queries this read; waiting for a reply
   private var token = UUID()  // identifies the current read; delayed work from an older read is ignored
   private var reader = JiecangReader()
@@ -186,11 +115,13 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
     scanStarted = Date()
     UserDefaults.standard.set(scanStarted, forKey: "scanStarted")
     central.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
+    startLocating()
     for s in stride(from: Self.scanSeconds, to: 0, by: -1) {
       secondsLeft = s
       do { try await Task.sleep(for: .seconds(1)) } catch { break }  // cancelled: stop early, never spin
     }
     central.stopScan()
+    locator.stopUpdatingLocation()
     scanning = false
     resumeWatch()  // the pull-down scan replaced the watch scan; put it back
     let ids = desks.values
@@ -327,10 +258,12 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
     // Skip nameless devices: phones and earbuds rotate private addresses, so keeping them grows without bound.
     guard ad.name != nil || ad.candidate else { return }
     peripherals[p.identifier] = p
-    desks[p.identifier] = Desk(
+    var d = Desk(
       id: p.identifier, name: ad.name ?? "Unnamed", rssi: rssi, candidate: ad.candidate,
       lastHeard: Date(), services: ad.services, maker: ad.maker,
       kind: Kind.guess(name: ad.name, mfg: ad.mfg, desk: ad.candidate), txPower: ad.txPower)
+    noteLocation(&d)
+    desks[p.identifier] = d
     if watching && ad.candidate { heardWhileWatching(p.identifier) }  // first sighting is exactly the case Watch alerts on
   }
 
@@ -352,12 +285,42 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
     let fresh = firstThisScan || (watching && !scanning)
     if fresh { d.refresh(from: ad) }
     let shownRSSI = smoothRSSI(p.identifier, rssi)
-    if let r = shownRSSI { d.rssi = r }
+    if let r = shownRSSI {
+      d.rssi = r
+      noteLocation(&d)
+    }
     if let name = ad.name { d.name = name }
     // Re-judged on every update, so a device misclassified by an older rule drops out of Desks.
     d.candidate = looksLikeDesk(name: d.name, services: d.services ?? ad.services)
     if d != old { desks[p.identifier] = d }  // publishing redraws the list: only on a real change
     if fresh, watching, d.isDesk { heardWhileWatching(p.identifier) }
+  }
+
+  // MARK: Location
+
+  private func startLocating() {
+    locator.delegate = self
+    locator.desiredAccuracy = kCLLocationAccuracyBest
+    if locator.authorizationStatus == .notDetermined { locator.requestWhenInUseAuthorization() }
+    locator.startUpdatingLocation()  // no-op without permission; the scan works the same either way
+  }
+
+  func locationManager(_ m: CLLocationManager, didUpdateLocations locations: [CLLocation]) { lastFix = locations.last }
+
+  func locationManagerDidChangeAuthorization(_ m: CLLocationManager) {
+    if scanning { m.startUpdatingLocation() }  // permission granted mid-scan
+  }
+
+  /// Saves where the phone is if this is the closest the desk has sounded. Skips stale or vague fixes (indoor GPS
+  /// above 100 m is not worth keeping).
+  private func noteLocation(_ d: inout Desk) {
+    guard d.isDesk, let fix = lastFix, fix.horizontalAccuracy > 0, fix.horizontalAccuracy < 100,
+      Date().timeIntervalSince(fix.timestamp) < 60,
+      shouldReplaceLocation(savedRSSI: d.seenAt?.rssi, savedAt: d.seenAt?.at, newRSSI: d.rssi)
+    else { return }
+    d.seenAt = .init(
+      latitude: fix.coordinate.latitude, longitude: fix.coordinate.longitude, accuracy: fix.horizontalAccuracy,
+      rssi: d.rssi, at: Date())
   }
 
   func centralManager(_ c: CBCentralManager, didConnect p: CBPeripheral) {
