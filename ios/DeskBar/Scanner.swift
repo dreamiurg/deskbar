@@ -91,6 +91,7 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
         })
     }
     forgetStale()
+    if DemoData.enabled { loadDemo() }
     if knownIDs.isEmpty { knownIDs = Set(desks.keys.map(\.uuidString)) }  // desks found before Watch existed aren't "new"
     if let until = watchUntil, until < Date() { watching = false }
     activity = Activity<WatchAttributes>.activities.first
@@ -157,7 +158,17 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
     }
   }
 
+  private func loadDemo() {
+    let demo = DemoData.desks()
+    desks = Dictionary(uniqueKeysWithValues: demo.map { ($0.id, $0) })
+    labels = Dictionary(uniqueKeysWithValues: demo.compactMap { d in DemoData.labels[d.name].map { (d.id.uuidString, $0) } })
+    pinned = Set(demo.prefix(1).map(\.id.uuidString))
+    scanStarted = Date().addingTimeInterval(-60)
+    lastRefresh = Date()
+  }
+
   private func save() {
+    guard !DemoData.enabled else { return }  // demo desks are never written over real ones
     forgetStale()
     let keep = desks.values.filter(\.isDesk)  // not every phone and earbud nearby
     UserDefaults.standard.set(try? JSONEncoder().encode(Array(keep)), forKey: "desks")
@@ -235,7 +246,7 @@ final class Scanner: NSObject, ObservableObject, CBCentralManagerDelegate, CBPer
     case .poweredOff:
       bluetoothProblem = "Bluetooth is off."
       updateActivity(force: true)
-    case .unsupported: bluetoothProblem = "This device has no Bluetooth LE."
+    case .unsupported: bluetoothProblem = DemoData.enabled ? nil : "This device has no Bluetooth LE."
     default: bluetoothProblem = nil  // unknown/resetting: transient
     }
   }

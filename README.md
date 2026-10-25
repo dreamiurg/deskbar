@@ -1,10 +1,19 @@
 # DeskBar
 [![CI](https://github.com/dreamiurg/deskbar/actions/workflows/ci.yml/badge.svg)](https://github.com/dreamiurg/deskbar/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 > Control a Bluetooth standing desk from the Mac menu bar, and inventory and control desks nearby from an iPhone.
 
 Works with desks using a **Jiecang** controller over Bluetooth (sold under Deskhouse, Uplift, Desky and other brands).
 The iPhone app also reads **Linak** desks (IKEA Idåsen and others) and lists any Bluetooth device it can't read yet.
+
+<p>
+  <img src="docs/screenshots/desks.png" width="250" alt="Desks page: pinned desk, desks in range sorted by distance, desks seen earlier">
+  <img src="docs/screenshots/desk-card.png" width="250" alt="Expanded desk card with details, Read height and Control">
+  <img src="docs/screenshots/map.png" width="250" alt="Map with each desk placed where it sounded closest">
+</p>
+
+<sub>Screenshots use the built-in demo data (made-up desks).</sub>
 
 ## Mac menu bar app
 
@@ -26,7 +35,11 @@ Generate with your Apple team ID (`DEVELOPMENT_TEAM=ABCDE12345 xcodegen`), then 
 - **Desks page:** pull down to scan; each desk shows an approximate distance, its height and a short ID. Tap to expand.
 - **Height controls:** hold Raise, Lower, Sit or Stand; the desk stops when you lift your finger.
 - **Watch mode:** a background scan for desks only, an alert for desks the phone hasn't seen before, and a Live Activity.
-- **Export:** CSV of every desk with its height.
+- **Map:** each desk pinned where it sounded closest during a scan, with the GPS accuracy as a circle.
+- **Export:** CSV of every desk with its height and position.
+
+No desk handy (or running in the Simulator, which has no Bluetooth)? Launch with the argument `-DeskBarDemo YES` to load
+made-up desks.
 
 A desk accepts one Bluetooth connection at a time: quit the Mac app before using the phone on the same desk.
 
@@ -53,4 +66,4 @@ Bluetooth company and service names come from Nordic Semiconductor's
 
 ## License
 
-Private project.
+[MIT](LICENSE)

@@ -1,6 +1,6 @@
 # Two stages: fast checks on every commit, builds and logic tests before every push.
 # Install once: pre-commit install && pre-commit install --hook-type pre-push
-exclude: ^(ios/build/|ios/DeskBar/BluetoothNumbers/)  # build output; vendored data kept byte-identical to upstream
+exclude: ^(ios/build[^/]*/|ios/DeskBar/BluetoothNumbers/)  # build output; vendored data kept byte-identical to upstream
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
