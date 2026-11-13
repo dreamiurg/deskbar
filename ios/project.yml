@@ -1,4 +1,8 @@
 name: DeskBar
+configs:
+  Debug: debug
+  Release: release   # App Store under Dragontail: io.dragontail.deskbar
+  Alpha: release     # test builds on a personal Apple team: io.dreamiurg.deskbar.alpha, "DeskBar Alpha"
 options:
   bundleIdPrefix: io.dragontail
   deploymentTarget:
@@ -15,6 +19,7 @@ targets:
   DeskBar:
     type: application
     platform: iOS
+    scheme: {}  # shared scheme, so xcodebuild -scheme works in CI and scripts/appstore.sh
     sources: [DeskBar, Shared]
     dependencies:
       - target: DeskBarWidget
@@ -25,7 +30,7 @@ targets:
     info:
       path: DeskBar/Info.plist
       properties:
-        CFBundleDisplayName: DeskBar
+        CFBundleDisplayName: $(APP_DISPLAY_NAME)
         UILaunchScreen: {}
         NSBluetoothAlwaysUsageDescription: DeskBar reads the height of nearby standing desks and watches for new ones.
         NSLocationWhenInUseUsageDescription: While you scan, DeskBar notes where each desk sounded closest so it can show desks on a map.
@@ -37,7 +42,12 @@ targets:
         # Same ID as DeskBarMac: one App Store record, one listing, Universal Purchase across iPhone and Mac.
         # Bundle IDs are unique across Apple teams: to build your own copy, change io.dragontail to your own prefix.
         PRODUCT_BUNDLE_IDENTIFIER: io.dragontail.deskbar
+        APP_DISPLAY_NAME: DeskBar
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+      configs:
+        Alpha:
+          PRODUCT_BUNDLE_IDENTIFIER: io.dreamiurg.deskbar.alpha
+          APP_DISPLAY_NAME: DeskBar Alpha
   DeskBarWidget:
     type: app-extension
     platform: iOS
@@ -55,9 +65,13 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.dragontail.deskbar.widget
+      configs:
+        Alpha:
+          PRODUCT_BUNDLE_IDENTIFIER: io.dreamiurg.deskbar.alpha.widget
   DeskBarMac:  # the Mac App Store build of ../main.swift; ../build.sh still builds the quick local copy
     type: application
     platform: macOS
+    scheme: {}
     sources:
       - path: ../main.swift
       - path: ../mac  # icon, privacy manifest, entitlements
@@ -80,3 +94,7 @@ targets:
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
         INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription: DeskBar connects to your standing desk to move it.
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
+      configs:
+        Alpha:
+          PRODUCT_BUNDLE_IDENTIFIER: io.dreamiurg.deskbar.alpha
+          INFOPLIST_KEY_CFBundleDisplayName: DeskBar Alpha

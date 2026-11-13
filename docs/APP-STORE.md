@@ -23,8 +23,9 @@ The code stays open source; signing material and keys never enter this repo.
 - App Store Connect API key: `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_P8` (the .p8 contents) in
   the same Doppler config. `scripts/appstore.sh` writes the .p8 to a temp dir and deletes it on exit. Without the key it
   uses the Apple ID signed in to Xcode.
-- The API key belongs to one Apple team. Build and upload with the Dragontail team only: the first archive registers
-  `io.dragontail.deskbar` to whichever team signs it, and another team can't take that bundle ID afterwards.
+- The API key belongs to one Apple team. Build the `Release` configuration with the Dragontail team only: the first
+  archive registers `io.dragontail.deskbar` to whichever team signs it, and another team can't take that bundle ID
+  afterwards. Test builds on a personal team use the `Alpha` configuration and its own ID, `io.dreamiurg.deskbar.alpha`.
 - Certificates and provisioning profiles: automatic signing creates and keeps them in the Mac's keychain and Xcode.
 - `.gitignore` blocks `*.p8`, `*.p12`, `*.cer`, `*.mobileprovision`, `*.provisionprofile`; gitleaks and
   `scripts/check-privacy.sh` run on every commit and PR.
@@ -36,6 +37,21 @@ git checkout main && git pull --tags
 scripts/appstore.sh all            # archive + export both apps to ios/build-appstore
 scripts/appstore.sh all --upload   # archive + upload to App Store Connect
 ```
+
+### Test builds on a personal Apple team (Alpha)
+
+The `Alpha` configuration builds "DeskBar Alpha" with bundle ID `io.dreamiurg.deskbar.alpha` (widget
+`io.dreamiurg.deskbar.alpha.widget`), so `io.dragontail.deskbar` stays free for Dragontail.
+
+1. Once, in App Store Connect on the web: New App, platforms iOS and macOS, name "DeskBar Alpha",
+   bundle ID `io.dreamiurg.deskbar.alpha`, SKU `deskbar-alpha`.
+2. Upload both apps, signed by the personal team:
+
+```bash
+DEVELOPMENT_TEAM=<personal team ID> CONFIG=Alpha scripts/appstore.sh all --upload
+```
+
+The Doppler `ASC_*` key must belong to that same personal team. CI builds both configurations unsigned on every PR.
 
 ## App Store Connect listing (paste-ready)
 

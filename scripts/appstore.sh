@@ -54,6 +54,7 @@ PLIST
 
 (cd ios && xcodegen generate --quiet)
 build=$(git rev-list --count HEAD)
+config="${CONFIG:-Release}"   # Alpha = personal-team test build (io.dreamiurg.deskbar.alpha)
 schemes="DeskBar DeskBarMac"
 [ "$platform" = ios ] && schemes=DeskBar
 [ "$platform" = mac ] && schemes=DeskBarMac
@@ -61,7 +62,7 @@ for scheme in $schemes; do   # a loop, not a function: "$@" must stay the auth f
   dest=generic/platform=iOS
   [ "$scheme" = DeskBarMac ] && dest=generic/platform=macOS
   archive="$out/$scheme-$build.xcarchive"
-  xcodebuild -project ios/DeskBar.xcodeproj -scheme "$scheme" -configuration Release -destination "$dest" \
+  xcodebuild -project ios/DeskBar.xcodeproj -scheme "$scheme" -configuration "$config" -destination "$dest" \
     -archivePath "$archive" -allowProvisioningUpdates "$@" archive -quiet
   xcodebuild -exportArchive -archivePath "$archive" -exportOptionsPlist "$tmp/ExportOptions.plist" \
     -exportPath "$out/$scheme-$build" -allowProvisioningUpdates "$@"
