@@ -32,6 +32,8 @@ targets:
       properties:
         CFBundleDisplayName: $(APP_DISPLAY_NAME)
         UILaunchScreen: {}
+        # App Store validation rejects a bundle without this key; these are the iPhone defaults when it is absent.
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         NSBluetoothAlwaysUsageDescription: DeskBar reads the height of nearby standing desks and watches for new ones.
         NSLocationWhenInUseUsageDescription: While you scan, DeskBar notes where each desk sounded closest so it can show desks on a map.
         UIBackgroundModes: [bluetooth-central]  # Watch mode: desk-only scan keeps running with the app in the background
