@@ -1,5 +1,5 @@
-# Cheap checks only: Linux runners. Building the apps needs macOS (billed at 10x), so builds and typechecks run in
-# the local pre-push hook instead. Jobs are few on purpose: each one is billed at least a minute.
+# Linux runners for the cheap checks, plus one unsigned macOS build of both apps (free on a public repo).
+# No signing identity or App Store Connect key ever reaches CI.
 name: CI
 
 on:
@@ -47,11 +47,27 @@ jobs:
           semgrep scan --config auto --error --quiet .
           lizard -l swift -C 15 -L 60 -a 5 -w main.swift ios/DeskBar ios/Shared ios/DeskBarWidget tests
 
+  build:
+    name: Build iPhone and Mac apps (unsigned)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Generate project
+        run: brew install xcodegen && cd ios && xcodegen generate
+      - name: Build
+        working-directory: ios
+        run: |
+          for c in Release Alpha; do
+            xcodebuild -project DeskBar.xcodeproj -scheme DeskBarMac -configuration "$c" -destination generic/platform=macOS CODE_SIGNING_ALLOWED=NO build -quiet
+            xcodebuild -project DeskBar.xcodeproj -scheme DeskBar -configuration "$c" -destination generic/platform=iOS CODE_SIGNING_ALLOWED=NO build -quiet
+          done
+
   # SENTINEL: the only required check in branch protection
   required-checks:
     name: Required Checks
     runs-on: ubuntu-latest
-    needs: [swift, checks]
+    needs: [swift, checks, build]
     if: always()
     steps:
       - name: Check results
