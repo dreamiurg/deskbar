@@ -58,6 +58,8 @@ CI runs the parts that work on Linux; builds stay local because macOS runners ar
 Every merge to `main` is released automatically: breaking change → major, `feat:` → minor, anything else → patch
 (`.github/workflows/release.yml`). Builds stamp in the latest tag, the commit count and the commit hash.
 
+App Store builds (both apps, sandboxed Mac target, no keys in the repo): [docs/APP-STORE.md](docs/APP-STORE.md).
+
 ## Acknowledgements
 
 Bluetooth company and service names come from Nordic Semiconductor's

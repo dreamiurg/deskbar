@@ -20,6 +20,8 @@
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>DeskBar reads the height of nearby standing desks and watches for new ones.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
