@@ -5,7 +5,7 @@
 # Version = latest vX.Y.Z tag, build = commit count (stamp-version.sh), so build from a clean, pushed main.
 # Nothing secret lives in this repo. The script reads, in order:
 #   team ID:  $DEVELOPMENT_TEAM, else DRAGONTAIL_TEAM_ID from Doppler (project studio, config prd)
-#   API key:  DRAGONTAIL_ASC_KEY_ID, DRAGONTAIL_ASC_ISSUER_ID, DRAGONTAIL_ASC_KEY_P8 from Doppler; without them,
+#   API key:  ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8 from Doppler; without them,
 #             the Apple ID signed in to Xcode is used. The .p8 is written to a temp dir and deleted on exit.
 # Signing is automatic: Xcode creates the certificates and profiles itself (-allowProvisioningUpdates).
 set -eu
@@ -27,11 +27,11 @@ out="$PWD/ios/build-appstore"
 mkdir -p "$out"
 
 set --   # auth flags for every xcodebuild call
-secret DRAGONTAIL_ASC_KEY_P8 > "$tmp/AuthKey.p8"
+secret ASC_KEY_P8 > "$tmp/AuthKey.p8"
 if [ -s "$tmp/AuthKey.p8" ]; then
   chmod 600 "$tmp/AuthKey.p8"
   set -- -authenticationKeyPath "$tmp/AuthKey.p8" \
-    -authenticationKeyID "$(secret DRAGONTAIL_ASC_KEY_ID)" -authenticationKeyIssuerID "$(secret DRAGONTAIL_ASC_ISSUER_ID)"
+    -authenticationKeyID "$(secret ASC_KEY_ID)" -authenticationKeyIssuerID "$(secret ASC_ISSUER_ID)"
   echo "Using the App Store Connect API key from Doppler"
 else
   echo "No API key in Doppler: using the Apple ID signed in to Xcode"

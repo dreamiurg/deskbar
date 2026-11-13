@@ -20,9 +20,11 @@ The code stays open source; signing material and keys never enter this repo.
 ## What stays out of the repo
 
 - Apple team ID: `DEVELOPMENT_TEAM` in the environment, or `DRAGONTAIL_TEAM_ID` in Doppler (project `studio`, config `prd`).
-- App Store Connect API key: `DRAGONTAIL_ASC_KEY_ID`, `DRAGONTAIL_ASC_ISSUER_ID`, `DRAGONTAIL_ASC_KEY_P8` (the .p8 contents) in
+- App Store Connect API key: `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_P8` (the .p8 contents) in
   the same Doppler config. `scripts/appstore.sh` writes the .p8 to a temp dir and deletes it on exit. Without the key it
   uses the Apple ID signed in to Xcode.
+- The API key belongs to one Apple team. Build and upload with the Dragontail team only: the first archive registers
+  `io.dragontail.deskbar` to whichever team signs it, and another team can't take that bundle ID afterwards.
 - Certificates and provisioning profiles: automatic signing creates and keeps them in the Mac's keychain and Xcode.
 - `.gitignore` blocks `*.p8`, `*.p12`, `*.cer`, `*.mobileprovision`, `*.provisionprofile`; gitleaks and
   `scripts/check-privacy.sh` run on every commit and PR.
