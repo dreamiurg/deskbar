@@ -7,6 +7,8 @@
 Works with desks using a **Jiecang** controller over Bluetooth (sold under Deskhouse, Uplift, Desky and other brands).
 The iPhone app also reads **Linak** desks (IKEA Idåsen and others) and lists any Bluetooth device it can't read yet.
 
+Why I built it, and what it showed about desk security: [Your standing desk is less secure than you think](https://dreamiurg.net/2026/11/13/your-standing-desk-is-less-secure-than-you-think.html).
+
 <p>
   <img src="docs/screenshots/desks.png" width="250" alt="Desks page: pinned desk, desks in range sorted by distance, desks seen earlier">
   <img src="docs/screenshots/desk-card.png" width="250" alt="Expanded desk card with details, Read height and Control">
